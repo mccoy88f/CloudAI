@@ -23,8 +23,10 @@ import {
   listMembers,
   listProjects,
   projectRole,
+  projectSummary,
   removeMember,
   renameProject,
+  updateIndent,
   updateMemberRole,
 } from "./projects.js"
 import { bindProjectSession } from "./session.js"
@@ -281,17 +283,30 @@ app.post("/api/projects", requireUser, async (c) => {
 app.patch("/api/projects/:id", requireUser, async (c) => {
   const access = await requireProject(c, true)
   if (access.error) return access.error
+  const projectId = c.req.param("id")
+  if (!projectId) return fail(c, 404, "Progetto assente")
   const body = await c.req.json().catch(() => null)
-  const name = readProjectName(body?.name)
-  if (!name) return fail(c, 400, "Serve un nome, fino a 80 caratteri")
-  const renamed = await renameProject(c.req.param("id"), name)
-  if (!renamed || !access.role) return fail(c, 404, "Progetto assente")
-  return c.json({
-    id: c.req.param("id"),
-    name,
-    role: access.role,
-    canWrite: access.role !== "viewer",
-  })
+  const hasName = body !== null && typeof body === "object" && "name" in body
+  const hasIndent = body !== null && typeof body === "object" && ("indentSize" in body || "indentWith" in body)
+  const name = hasName ? readProjectName(body?.name) : null
+  if (hasName && !name) return fail(c, 400, "Serve un nome, fino a 80 caratteri")
+  if (!name && !hasIndent) return fail(c, 400, "Nessuna modifica")
+  if (hasIndent) {
+    const indentSize = Number(body?.indentSize)
+    const indentWith = body?.indentWith === "tab" ? "tab" : body?.indentWith === "space" ? "space" : null
+    if (!Number.isInteger(indentSize) || indentSize < 1 || indentSize > 8 || !indentWith) {
+      return fail(c, 400, "Indentazione non valida")
+    }
+    const updated = await updateIndent(projectId, indentSize, indentWith)
+    if (!updated) return fail(c, 404, "Progetto assente")
+  }
+  if (name) {
+    const renamed = await renameProject(projectId, name)
+    if (!renamed) return fail(c, 404, "Progetto assente")
+  }
+  const project = await projectSummary(projectId, c.get("user").id)
+  if (!project) return fail(c, 404, "Progetto assente")
+  return c.json(project)
 })
 
 app.delete("/api/projects/:id", requireUser, async (c) => {
@@ -343,6 +358,65 @@ app.delete("/api/projects/:id/members/:userId", requireUser, async (c) => {
   if (!removed) return fail(c, 404, "Membro assente")
   return c.json({ ok: true })
 })
+
+app.get("/api/projects/:id/files", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  return proxyFile(c, "GET")
+})
+
+app.get("/api/projects/:id/file", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  return proxyFile(c, "GET")
+})
+
+app.put("/api/projects/:id/file", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  return proxyFile(c, "PUT")
+})
+
+app.get("/api/projects/:id/raw", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  const projectId = c.req.param("id")
+  const rel = c.req.query("path") ?? ""
+  if (!projectId || !rel) return fail(c, 400, "Percorso non valido")
+  try {
+    const response = await fetch(`${runnerUrl}/projects/${projectId}/raw?path=${encodeURIComponent(rel)}`)
+    if (!response.ok || !response.body) return fail(c, response.status === 404 ? 404 : 400, "File assente")
+    return c.body(response.body, 200, {
+      "content-type": response.headers.get("content-type") ?? "application/octet-stream",
+      "content-disposition": response.headers.get("content-disposition") ?? "attachment",
+    })
+  } catch {
+    return fail(c, 400, "Il runner non risponde")
+  }
+})
+
+async function proxyFile(c: AppContext, method: "GET" | "PUT") {
+  const projectId = c.req.param("id")
+  if (!projectId) return fail(c, 404, "Progetto assente")
+  const target = c.req.path.endsWith("/files") ? "files" : "file"
+  const rel = c.req.query("path") ?? ""
+  const query = target === "files" || rel ? `?path=${encodeURIComponent(rel)}` : ""
+  try {
+    const response = await fetch(`${runnerUrl}/projects/${projectId}/${target}${method === "GET" ? query : ""}`, {
+      method,
+      headers: method === "PUT" ? { "content-type": "application/json" } : undefined,
+      body: method === "PUT" ? await c.req.raw.clone().text() : undefined,
+    })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const error = typeof body.error === "string" ? body.error : "File non disponibile"
+      return fail(c, response.status === 404 ? 404 : 400, error)
+    }
+    return c.json(body)
+  } catch {
+    return fail(c, 400, "Il runner non risponde")
+  }
+}
 
 async function requireProject(c: AppContext, write: boolean) {
   const projectId = c.req.param("id")

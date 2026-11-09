@@ -5,6 +5,8 @@ import { streamSSE } from "hono/streaming"
 import { Hono } from "hono"
 import type { EngineKind } from "@cloudai/shared"
 import { permission, stop, submit, subscribe, type SessionSpec } from "./live.js"
+import { listFiles, readBytes, readDocument, writeDocument } from "./files.js"
+import { appendArchive, ensureProjectKnowledge, projectMemory } from "./knowledge.js"
 
 const port = Number(process.env.PORT ?? 4000)
 const workspacesDir = process.env.WORKSPACES_DIR ?? "/workspaces"
@@ -31,6 +33,7 @@ app.post("/projects/:id", async (c) => {
   const dir = inside(workspacesDir, c.req.param("id"))
   if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
   await mkdir(dir, { recursive: true, mode: 0o700 })
+  await ensureProjectKnowledge(dir)
   return c.json({ ok: true, dir })
 })
 
@@ -39,6 +42,69 @@ app.delete("/projects/:id", async (c) => {
   if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
   await rm(dir, { recursive: true, force: true })
   return c.json({ ok: true })
+})
+
+app.get("/projects/:id/files", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  if (!(await exists(dir))) return c.json({ error: "Progetto assente" }, 404)
+  await ensureProjectKnowledge(dir).catch(() => undefined)
+  const listing = await listFiles(dir, c.req.query("path") ?? "")
+  if (!listing) return c.json({ error: "Cartella assente" }, 404)
+  return c.json(listing)
+})
+
+app.get("/projects/:id/file", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  const rel = c.req.query("path") ?? ""
+  if (!dir || !rel) return c.json({ error: "Percorso non valido" }, 400)
+  const document = await readDocument(dir, rel)
+  if (document === "invalid") return c.json({ error: "Percorso non valido" }, 400)
+  if (document === "missing") return c.json({ error: "File assente" }, 404)
+  return c.json(document)
+})
+
+app.put("/projects/:id/file", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  const body = await c.req.json().catch(() => null)
+  const rel = typeof body?.path === "string" ? body.path : ""
+  const text = typeof body?.text === "string" ? body.text : null
+  if (!rel || text === null) return c.json({ error: "Percorso non valido" }, 400)
+  const result = await writeDocument(dir, rel, text)
+  if (result === "large") return c.json({ error: "File troppo grande" }, 400)
+  if (result !== "ok") return c.json({ error: "Percorso non valido" }, 400)
+  return c.json({ ok: true })
+})
+
+app.get("/projects/:id/raw", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  const rel = c.req.query("path") ?? ""
+  if (!dir || !rel) return c.json({ error: "Percorso non valido" }, 400)
+  const file = await readBytes(dir, rel)
+  if (!file) return c.json({ error: "File assente" }, 404)
+  return c.body(new Uint8Array(file.bytes), 200, {
+    "content-type": "application/octet-stream",
+    "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+  })
+})
+
+app.post("/projects/:id/archive", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  const body = await c.req.json().catch(() => null)
+  const who = typeof body?.who === "string" ? body.who : ""
+  const text = typeof body?.text === "string" ? body.text : ""
+  const at = typeof body?.at === "string" ? body.at : new Date().toISOString()
+  if (!who.trim() || !text.trim()) return c.json({ error: "Voce vuota" }, 400)
+  await appendArchive(dir, { at, who, text })
+  return c.json({ ok: true })
+})
+
+app.get("/projects/:id/memory", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  return c.json({ text: await projectMemory(dir) })
 })
 
 app.get("/sessions/:projectId/events", (c) => {

@@ -1,7 +1,8 @@
 import type { EngineSummary, ProjectSummary, PublicUser } from "@cloudai/shared"
-import { Files, Globe, Menu, Package, PanelRight } from "lucide-react"
-import { useCallback, useEffect, useState, type ReactNode } from "react"
+import { Globe, Menu, Package, PanelRight } from "lucide-react"
+import { useCallback, useEffect, useState, lazy, Suspense, type ReactNode } from "react"
 import { EnginesButton } from "@/components/engines-panel"
+import { FileTree } from "@/components/file-tree"
 import { ProjectColumn } from "@/components/project-column"
 import { SessionPanel, useProjectSession } from "@/components/session-panel"
 import { Badge } from "@/components/ui/badge"
@@ -13,6 +14,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, api } from "@/lib/api"
 import { usePlatformStatus, type LinkState } from "@/lib/platform"
 
+const FileEditor = lazy(() => import("@/components/file-editor").then((mod) => ({ default: mod.FileEditor })))
+
 export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout: () => void }) {
   const [projectsOpen, setProjectsOpen] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
@@ -22,6 +25,9 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
   const status = usePlatformStatus()
   const selected = projects.find((project) => project.id === selectedId) ?? null
   const session = useProjectSession(selected)
+  const desktop = useDesktop()
+  const [openPath, setOpenPath] = useState<string | null>(null)
+  const [treeRevision, setTreeRevision] = useState(0)
   const reloadEngines = useCallback(async () => {
     const rows = await api<EngineSummary[]>("/api/engines")
     setEngines(rows.filter((engine) => engine.status === "connected"))
@@ -36,6 +42,15 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
     void reloadEngines().catch(() => setEngines([]))
     void reloadProjects().catch(() => setProjects([]))
   }, [reloadEngines, reloadProjects])
+
+  useEffect(() => {
+    setOpenPath(null)
+  }, [selected?.id])
+
+  function openFile(path: string) {
+    setOpenPath(path)
+    setContextOpen(false)
+  }
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
@@ -73,24 +88,62 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
         </div>
       </header>
 
-      <div className="hidden min-h-0 flex-1 md:grid md:grid-cols-[16rem_minmax(0,1fr)_20rem]">
-        <ProjectColumn
-          projects={projects}
-          selectedId={selected?.id ?? null}
-          onSelect={(id) => {
-            setSelectedId(id)
-            setProjectsOpen(false)
-          }}
-          onChanged={reloadProjects}
-          formId="desk"
-        />
-        <SessionPanel engines={engines} project={selected} session={session} inputId="engine" />
-        <ContextColumn />
-      </div>
-
-      <div className="min-h-0 flex-1 md:hidden">
-        <SessionPanel engines={engines} project={selected} session={session} inputId="engine-mobile" />
-      </div>
+      {desktop ? (
+        <div className="hidden min-h-0 flex-1 md:grid md:grid-cols-[16rem_minmax(0,1fr)_20rem]">
+          <ProjectColumn
+            projects={projects}
+            selectedId={selected?.id ?? null}
+            onSelect={(id) => {
+              setSelectedId(id)
+              setProjectsOpen(false)
+            }}
+            onChanged={reloadProjects}
+            formId="desk"
+          />
+          {selected && openPath ? (
+            <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Apro l’editor…</p>}>
+              <FileEditor
+                project={selected}
+                path={openPath}
+                fullscreen={false}
+                onClose={() => setOpenPath(null)}
+                onSaved={() => setTreeRevision((value) => value + 1)}
+                onProject={(project) =>
+                  setProjects((current) => current.map((item) => (item.id === project.id ? project : item)))
+                }
+              />
+            </Suspense>
+          ) : (
+            <SessionPanel engines={engines} project={selected} session={session} inputId="engine" />
+          )}
+          <ContextColumn
+            project={selected}
+            openPath={openPath}
+            revision={treeRevision}
+            onOpen={openFile}
+            onCreated={() => setTreeRevision((value) => value + 1)}
+          />
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 md:hidden">
+          {selected && openPath ? (
+            <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Apro l’editor…</p>}>
+              <FileEditor
+                project={selected}
+                path={openPath}
+                fullscreen
+                onClose={() => setOpenPath(null)}
+                onSaved={() => setTreeRevision((value) => value + 1)}
+                onProject={(project) =>
+                  setProjects((current) => current.map((item) => (item.id === project.id ? project : item)))
+                }
+              />
+            </Suspense>
+          ) : (
+            <SessionPanel engines={engines} project={selected} session={session} inputId="engine-mobile" />
+          )}
+        </div>
+      )}
 
       <Sheet open={projectsOpen} onOpenChange={setProjectsOpen}>
         <SheetContent side="left" title="Progetti">
@@ -108,7 +161,13 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
       </Sheet>
       <Sheet open={contextOpen} onOpenChange={setContextOpen}>
         <SheetContent side="right" title="File, pacchetti e domini" className="w-[min(100%,24rem)]">
-          <ContextColumn />
+          <ContextColumn
+            project={selected}
+            openPath={openPath}
+            revision={treeRevision}
+            onOpen={openFile}
+            onCreated={() => setTreeRevision((value) => value + 1)}
+          />
         </SheetContent>
       </Sheet>
     </div>
@@ -185,7 +244,19 @@ function InviteButton() {
   )
 }
 
-function ContextColumn() {
+function ContextColumn({
+  project,
+  openPath,
+  revision,
+  onOpen,
+  onCreated,
+}: {
+  project: ProjectSummary | null
+  openPath: string | null
+  revision: number
+  onOpen: (path: string) => void
+  onCreated: () => void
+}) {
   return (
     <aside className="flex h-full min-h-0 flex-col border-border md:border-l">
       <Tabs defaultValue="files" className="h-full">
@@ -195,7 +266,7 @@ function ContextColumn() {
           <TabsTrigger value="domains">Domini</TabsTrigger>
         </TabsList>
         <TabsContent value="files">
-          <EmptyPanel icon={<Files className="size-4" />} text="Nessun file" />
+          <FileTree project={project} openPath={openPath} revision={revision} onOpen={onOpen} onCreated={onCreated} />
         </TabsContent>
         <TabsContent value="packages">
           <EmptyPanel icon={<Package className="size-4" />} text="Nessun pacchetto" />
@@ -215,6 +286,17 @@ function EmptyPanel({ icon, text }: { icon: ReactNode; text: string }) {
       {text}
     </div>
   )
+}
+
+function useDesktop() {
+  const [desktop, setDesktop] = useState(() => window.matchMedia("(min-width: 768px)").matches)
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 768px)")
+    const update = () => setDesktop(query.matches)
+    query.addEventListener("change", update)
+    return () => query.removeEventListener("change", update)
+  }, [])
+  return desktop
 }
 
 function StatusBadge({ label, state, className }: { label: string; state: LinkState; className?: string }) {

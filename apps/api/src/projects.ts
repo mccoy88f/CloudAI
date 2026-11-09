@@ -1,4 +1,4 @@
-import type { ProjectMember, ProjectRole, ProjectSummary } from "@cloudai/shared"
+import type { IndentWith, ProjectMember, ProjectRole, ProjectSummary } from "@cloudai/shared"
 import { randomUUID } from "node:crypto"
 import { findUserByEmail } from "./accounts.js"
 import { sql } from "./db.js"
@@ -6,8 +6,8 @@ import { sql } from "./db.js"
 const runnerUrl = process.env.RUNNER_URL ?? "http://runner:4000"
 
 export async function listProjects(userId: string): Promise<ProjectSummary[]> {
-  const rows = await sql<{ id: string; name: string; role: ProjectRole }[]>`
-    select p.id, p.name, m.role
+  const rows = await sql<{ id: string; name: string; role: ProjectRole; indentSize: number; indentWith: string }[]>`
+    select p.id, p.name, m.role, p.indent_size as "indentSize", p.indent_with as "indentWith"
     from projects p
     join memberships m on m.project_id = p.id
     where m.user_id = ${userId}
@@ -41,12 +41,32 @@ export async function createProject(userId: string, name: string): Promise<Proje
           values (${id}, ${userId}, 'owner')
         `
       })
-      return { id, name, role: "owner", canWrite: true }
+      return { id, name, role: "owner", canWrite: true, indentSize: 2, indentWith: "space" }
     } catch (error) {
       if (!isUnique(error)) throw error
     }
   }
   throw new Error("Nome progetto non disponibile")
+}
+
+export async function projectSummary(projectId: string, userId: string): Promise<ProjectSummary | null> {
+  const rows = await sql<{ id: string; name: string; role: ProjectRole; indentSize: number; indentWith: string }[]>`
+    select p.id, p.name, m.role, p.indent_size as "indentSize", p.indent_with as "indentWith"
+    from projects p
+    join memberships m on m.project_id = p.id
+    where p.id = ${projectId} and m.user_id = ${userId}
+  `
+  return rows[0] ? toSummary(rows[0]) : null
+}
+
+export async function updateIndent(projectId: string, indentSize: number, indentWith: IndentWith): Promise<boolean> {
+  const rows = await sql<{ id: string }[]>`
+    update projects
+    set indent_size = ${indentSize}, indent_with = ${indentWith}
+    where id = ${projectId}
+    returning id
+  `
+  return Boolean(rows[0])
 }
 
 export async function renameProject(projectId: string, name: string): Promise<boolean> {
@@ -121,8 +141,21 @@ export async function removeMember(projectId: string, userId: string): Promise<b
   return Boolean(rows[0])
 }
 
-function toSummary(row: { id: string; name: string; role: ProjectRole }): ProjectSummary {
-  return { ...row, canWrite: row.role === "owner" || row.role === "editor" }
+function toSummary(row: {
+  id: string
+  name: string
+  role: ProjectRole
+  indentSize: number
+  indentWith: string
+}): ProjectSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    role: row.role,
+    canWrite: row.role === "owner" || row.role === "editor",
+    indentSize: row.indentSize,
+    indentWith: row.indentWith === "tab" ? "tab" : "space",
+  }
 }
 
 function slugify(name: string): string {

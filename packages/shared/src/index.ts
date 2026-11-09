@@ -34,11 +34,15 @@ export type EngineSummary = {
 
 export type ProjectRole = "owner" | "editor" | "viewer"
 
+export type IndentWith = "space" | "tab"
+
 export type ProjectSummary = {
   id: string
   name: string
   role: ProjectRole
   canWrite: boolean
+  indentSize: number
+  indentWith: IndentWith
 }
 
 export type ProjectMember = {
@@ -88,3 +92,23 @@ export type RunnerEvent =
   | { type: "native"; sessionId: string }
   | { type: "idle" }
   | { type: "done" }
+
+export type FileEntry = {
+  name: string
+  path: string
+  kind: "file" | "dir"
+  size: number
+}
+
+export type FileListing = {
+  entries: FileEntry[]
+  truncated: boolean
+}
+
+export type FileDocument = {
+  path: string
+  size: number
+  binary: boolean
+  tooLarge: boolean
+  text: string | null
+}

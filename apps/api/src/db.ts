@@ -73,6 +73,12 @@ export async function ensureSchema(): Promise<void> {
     )
   `
   await sql`
+    alter table projects add column if not exists indent_size integer not null default 2
+  `
+  await sql`
+    alter table projects add column if not exists indent_with text not null default 'space'
+  `
+  await sql`
     create table if not exists memberships (
       project_id uuid not null references projects (id) on delete cascade,
       user_id uuid not null references users (id) on delete cascade,

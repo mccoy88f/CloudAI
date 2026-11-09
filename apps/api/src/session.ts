@@ -10,6 +10,7 @@ import {
   updateJournalText,
   writeBinding,
 } from "./journal.js"
+import { archiveConversation, readMemory } from "./knowledge.js"
 
 type Socket = { send(data: string): void }
 
@@ -19,6 +20,7 @@ type Run = {
   queue: Queued[]
   assistantId: string | null
   assistantText: string
+  assistantArchived: boolean
   running: boolean
   draining: boolean
   engineId: string | null
@@ -79,6 +81,7 @@ async function handle(projectId: string, user: PublicUser, socket: Socket, raw: 
     return
   }
   if (message.type === "stop") {
+    await archivePartial(projectId)
     runFor(projectId).queue.length = 0
     await fetch(`${runnerUrl}/sessions/${projectId}/stop`, { method: "POST" }).catch(() => undefined)
     return
@@ -102,16 +105,11 @@ async function handle(projectId: string, user: PublicUser, socket: Socket, raw: 
 async function deliver(projectId: string, item: Queued, recordUser: boolean): Promise<void> {
   const engine = await loadEngine(item.engineId)
   if (!engine) {
-    const event = await appendJournal({
-      projectId,
-      engineId: null,
-      authorId: item.authorId,
-      kind: "error",
-      text: "Motore non disponibile",
-    })
-    broadcast(projectId, { type: "event", event })
+    await publishError(projectId, null, "Motore non disponibile")
     return
   }
+  const run = runFor(projectId)
+  if (run.engineId && run.engineId !== engine.id) await archivePartial(projectId)
   if (recordUser) {
     const event = await appendJournal({
       projectId,
@@ -121,12 +119,20 @@ async function deliver(projectId: string, item: Queued, recordUser: boolean): Pr
       text: item.text,
     })
     broadcast(projectId, { type: "event", event })
+    await archiveConversation(projectId, "utente", item.text).catch(() => undefined)
   }
   const history = await listJournal(projectId)
   const prior = history.at(-1)?.kind === "user" ? history.slice(0, -1) : history
   const lastEngine = [...prior].reverse().find((event) => event.engineId)?.engineId ?? null
   const resumeId = await readBinding(projectId, engine.id)
-  const context = !resumeId || (lastEngine && lastEngine !== engine.id) ? summarize(prior) : null
+  const handoff = !resumeId || (lastEngine !== null && lastEngine !== engine.id)
+  let context: string | null = null
+  if (handoff) {
+    const memory = await readMemory(projectId).catch(() => null)
+    const recent = summarize(prior)
+    const parts = [memory ? `Memoria del progetto:\n${memory}` : null, recent].filter((part): part is string => Boolean(part))
+    context = parts.length > 0 ? parts.join("\n\n") : null
+  }
   try {
     await ensurePump(projectId)
     const response = await fetch(`${runnerUrl}/sessions/${projectId}/message`, {
@@ -158,14 +164,7 @@ async function deliver(projectId: string, item: Queued, recordUser: boolean): Pr
     run.running = true
     broadcast(projectId, { type: "running", running: true })
   } catch {
-    const event = await appendJournal({
-      projectId,
-      engineId: engine.id,
-      authorId: null,
-      kind: "error",
-      text: "Il runner non risponde",
-    })
-    broadcast(projectId, { type: "event", event })
+    await publishError(projectId, engine.id, "Il runner non risponde")
   }
 }
 
@@ -226,6 +225,7 @@ async function applyRunnerEvent(projectId: string, event: RunnerEvent): Promise<
   if (event.type === "delta") {
     run.assistantText += event.text
     if (!run.assistantId) {
+      run.assistantArchived = false
       const row = await appendJournal({
         projectId,
         engineId: run.engineId,
@@ -256,6 +256,10 @@ async function applyRunnerEvent(projectId: string, event: RunnerEvent): Promise<
       })
       broadcast(projectId, { type: "event", event: row })
     }
+    if (!run.assistantArchived && event.text.trim()) {
+      run.assistantArchived = true
+      await archiveConversation(projectId, run.engineName ?? "assistente", event.text).catch(() => undefined)
+    }
     run.assistantId = null
     run.assistantText = ""
     return
@@ -283,9 +287,11 @@ async function applyRunnerEvent(projectId: string, event: RunnerEvent): Promise<
   }
   if (event.type === "error") {
     await persist(projectId, "error", event.text, {})
+    await archiveConversation(projectId, "errore", event.text).catch(() => undefined)
     return
   }
   if (event.type === "idle" || event.type === "done") {
+    await archivePartial(projectId)
     run.running = false
     run.assistantId = null
     run.assistantText = ""
@@ -320,6 +326,25 @@ async function persist(
   broadcast(projectId, { type: "event", event })
 }
 
+async function publishError(projectId: string, engineId: string | null, text: string): Promise<void> {
+  const event = await appendJournal({
+    projectId,
+    engineId,
+    authorId: null,
+    kind: "error",
+    text,
+  })
+  broadcast(projectId, { type: "event", event })
+  await archiveConversation(projectId, "errore", text).catch(() => undefined)
+}
+
+async function archivePartial(projectId: string): Promise<void> {
+  const run = runFor(projectId)
+  if (run.assistantArchived || !run.assistantText.trim()) return
+  run.assistantArchived = true
+  await archiveConversation(projectId, run.engineName ?? "assistente", run.assistantText).catch(() => undefined)
+}
+
 function broadcast(projectId: string, message: unknown): void {
   const data = JSON.stringify(message)
   for (const socket of rooms.get(projectId) ?? []) {
@@ -338,6 +363,7 @@ function runFor(projectId: string): Run {
     queue: [],
     assistantId: null,
     assistantText: "",
+    assistantArchived: false,
     running: false,
     draining: false,
     engineId: null,
