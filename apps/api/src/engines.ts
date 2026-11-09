@@ -1,6 +1,6 @@
 import type { EngineKind, EngineStatus, EngineSummary } from "@cloudai/shared"
 import { randomUUID } from "node:crypto"
-import { encryptSecret } from "./crypto.js"
+import { decryptSecret, encryptSecret } from "./crypto.js"
 import { sql } from "./db.js"
 
 const runnerUrl = process.env.RUNNER_URL ?? "http://runner:4000"
@@ -92,6 +92,41 @@ export async function probeOpenAI(baseUrl: string, apiKey: string): Promise<bool
 async function ensureEngineHome(id: string): Promise<void> {
   const response = await fetch(`${runnerUrl}/engines/${id}`, { method: "POST" })
   if (!response.ok) throw new Error("Il runner non ha preparato la home del motore")
+}
+
+export async function loadEngine(id: string): Promise<{
+  id: string
+  name: string
+  kind: EngineKind
+  baseUrl: string | null
+  model: string | null
+  secret: string
+} | null> {
+  const rows = await sql<
+    {
+      id: string
+      name: string
+      kind: EngineKind
+      status: EngineStatus
+      baseUrl: string | null
+      model: string | null
+      secretEnc: string
+    }[]
+  >`
+    select id, name, kind, status, base_url as "baseUrl", model, secret_enc as "secretEnc"
+    from engines
+    where id = ${id}
+  `
+  const row = rows[0]
+  if (!row || row.status !== "connected") return null
+  return {
+    id: row.id,
+    name: row.name,
+    kind: row.kind,
+    baseUrl: row.baseUrl,
+    model: row.model,
+    secret: decryptSecret(row.secretEnc),
+  }
 }
 
 export function isUniqueName(error: unknown): boolean {

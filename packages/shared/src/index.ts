@@ -62,3 +62,29 @@ export type SetupState = {
   publicUrl: string
   previewDomain: string
 }
+
+export type JournalKind = "user" | "assistant" | "tool" | "diff" | "permission" | "status" | "error"
+
+export type JournalEvent = {
+  id: string
+  projectId: string
+  engineId: string | null
+  engineName: string | null
+  authorId: string | null
+  kind: JournalKind
+  text: string
+  payload: Record<string, unknown>
+  createdAt: string
+}
+
+export type RunnerEvent =
+  | { type: "delta"; text: string }
+  | { type: "assistant"; text: string }
+  | { type: "tool"; name: string; input: string }
+  | { type: "diff"; path: string; patch: string }
+  | { type: "permission"; requestId: string; tool: string; input: string }
+  | { type: "status"; text: string }
+  | { type: "error"; text: string }
+  | { type: "native"; sessionId: string }
+  | { type: "idle" }
+  | { type: "done" }

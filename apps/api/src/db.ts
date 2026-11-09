@@ -80,6 +80,29 @@ export async function ensureSchema(): Promise<void> {
       primary key (project_id, user_id)
     )
   `
+  await sql`
+    create table if not exists journal_events (
+      id uuid primary key,
+      project_id uuid not null references projects (id) on delete cascade,
+      engine_id uuid references engines (id) on delete set null,
+      author_id uuid references users (id) on delete set null,
+      kind text not null check (kind in ('user', 'assistant', 'tool', 'diff', 'permission', 'status', 'error')),
+      text text not null default '',
+      payload jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now()
+    )
+  `
+  await sql`
+    create index if not exists journal_project_created on journal_events (project_id, created_at)
+  `
+  await sql`
+    create table if not exists engine_bindings (
+      project_id uuid not null references projects (id) on delete cascade,
+      engine_id uuid not null references engines (id) on delete cascade,
+      native_session_id text,
+      primary key (project_id, engine_id)
+    )
+  `
 }
 
 export async function readState(key: string): Promise<string | null> {

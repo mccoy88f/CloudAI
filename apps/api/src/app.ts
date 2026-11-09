@@ -27,6 +27,7 @@ import {
   renameProject,
   updateMemberRole,
 } from "./projects.js"
+import { bindProjectSession } from "./session.js"
 
 const COOKIE = "cloudai_session"
 const runnerUrl = process.env.RUNNER_URL ?? "http://runner:4000"
@@ -374,6 +375,23 @@ app.post("/api/invites/accept", async (c) => {
   writeSessionCookie(c, await createSession(result.id))
   return c.json(result)
 })
+
+app.get(
+  "/api/projects/:id/session",
+  requireUser,
+  upgradeWebSocket((c) => {
+    const projectId = c.req.param("id")
+    const user = c.get("user")
+    if (!projectId) {
+      return {
+        onOpen(_event: unknown, ws: { close(): void }) {
+          ws.close()
+        },
+      }
+    }
+    return bindProjectSession(projectId, user)
+  }),
+)
 
 app.get(
   "/api/ws",

@@ -3,6 +3,7 @@ import { Files, Globe, Menu, Package, PanelRight } from "lucide-react"
 import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { EnginesButton } from "@/components/engines-panel"
 import { ProjectColumn } from "@/components/project-column"
+import { SessionPanel, useProjectSession } from "@/components/session-panel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -20,6 +21,7 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const status = usePlatformStatus()
   const selected = projects.find((project) => project.id === selectedId) ?? null
+  const session = useProjectSession(selected)
   const reloadEngines = useCallback(async () => {
     const rows = await api<EngineSummary[]>("/api/engines")
     setEngines(rows.filter((engine) => engine.status === "connected"))
@@ -82,12 +84,12 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
           onChanged={reloadProjects}
           formId="desk"
         />
-        <SessionColumn engines={engines} project={selected} inputId="engine" />
+        <SessionPanel engines={engines} project={selected} session={session} inputId="engine" />
         <ContextColumn />
       </div>
 
       <div className="min-h-0 flex-1 md:hidden">
-        <SessionColumn engines={engines} project={selected} inputId="engine-mobile" />
+        <SessionPanel engines={engines} project={selected} session={session} inputId="engine-mobile" />
       </div>
 
       <Sheet open={projectsOpen} onOpenChange={setProjectsOpen}>
@@ -180,75 +182,6 @@ function InviteButton() {
         </SheetContent>
       </Sheet>
     </>
-  )
-}
-
-function SessionColumn({
-  engines,
-  project,
-  inputId,
-}: {
-  engines: EngineSummary[]
-  project: ProjectSummary | null
-  inputId: string
-}) {
-  const [selected, setSelected] = useState(engines[0]?.id ?? "")
-
-  useEffect(() => {
-    if (!engines.some((engine) => engine.id === selected)) {
-      setSelected(engines[0]?.id ?? "")
-    }
-  }, [engines, selected])
-
-  return (
-    <main className="flex h-full min-h-0 flex-col">
-      <div className="flex h-12 items-center gap-3 border-b border-border px-4">
-        <label className="text-xs text-muted-foreground" htmlFor={inputId}>
-          Motore
-        </label>
-        <select
-          id={inputId}
-          disabled={engines.length === 0}
-          value={selected}
-          onChange={(event) => setSelected(event.target.value)}
-          className="h-8 max-w-56 rounded-md border border-border bg-background px-2 text-sm disabled:text-muted-foreground"
-        >
-          {engines.length === 0 ? <option value="">Nessun motore</option> : null}
-          {engines.map((engine) => (
-            <option key={engine.id} value={engine.id}>
-              {engine.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
-        <p className="max-w-sm text-sm text-muted-foreground">
-          {project
-            ? project.canWrite
-              ? `${project.name} è pronto. La sessione del motore arriva al passo successivo.`
-              : `${project.name} è in sola lettura. La sessione resta a owner ed editor.`
-            : "Seleziona un progetto per aprire la sessione. I messaggi del motore compariranno qui."}
-        </p>
-      </div>
-      <form className="border-t border-border p-3" onSubmit={(event) => event.preventDefault()}>
-        <label className="sr-only" htmlFor={`${inputId}-composer`}>
-          Messaggio
-        </label>
-        <textarea
-          id={`${inputId}-composer`}
-          disabled
-          rows={3}
-          placeholder={
-            !project
-              ? "Seleziona un progetto"
-              : project.canWrite
-                ? "Il messaggio al motore si abilita con la sessione"
-                : "Sola lettura"
-          }
-          className="w-full resize-none rounded-md border border-border bg-card px-3 py-2 text-sm outline-none placeholder:text-muted-foreground disabled:opacity-70"
-        />
-      </form>
-    </main>
   )
 }
 
