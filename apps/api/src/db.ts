@@ -48,6 +48,21 @@ export async function ensureSchema(): Promise<void> {
       created_at timestamptz not null default now()
     )
   `
+  await sql`
+    create table if not exists engines (
+      id uuid primary key,
+      name text not null,
+      kind text not null check (kind in ('claude', 'cursor', 'gemini', 'openai')),
+      status text not null check (status in ('connected', 'disabled')),
+      secret_enc text not null,
+      base_url text,
+      model text,
+      created_at timestamptz not null default now()
+    )
+  `
+  await sql`
+    create unique index if not exists engines_name_lower on engines (lower(name))
+  `
 }
 
 export async function readState(key: string): Promise<string | null> {

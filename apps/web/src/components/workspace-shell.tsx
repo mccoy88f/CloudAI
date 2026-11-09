@@ -1,6 +1,7 @@
-import type { PublicUser } from "@cloudai/shared"
+import type { EngineSummary, PublicUser } from "@cloudai/shared"
 import { Files, FolderClosed, Globe, Menu, Package, PanelRight } from "lucide-react"
-import { useState, type ReactNode } from "react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
+import { EnginesButton } from "@/components/engines-panel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,7 +16,16 @@ import { usePlatformStatus, type LinkState } from "@/lib/platform"
 export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout: () => void }) {
   const [projectsOpen, setProjectsOpen] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
+  const [engines, setEngines] = useState<EngineSummary[]>([])
   const status = usePlatformStatus()
+  const reloadEngines = useCallback(async () => {
+    const rows = await api<EngineSummary[]>("/api/engines")
+    setEngines(rows.filter((engine) => engine.status === "connected"))
+  }, [])
+
+  useEffect(() => {
+    void reloadEngines().catch(() => setEngines([]))
+  }, [reloadEngines])
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
@@ -35,6 +45,7 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
         <div className="ml-auto flex items-center gap-2">
           <StatusBadge label="API" state={status.health?.ok ? "up" : status.health ? "down" : "connecting"} />
           <StatusBadge className="hidden sm:inline-flex" label="Sessione" state={status.socket} />
+          {user.role === "admin" ? <EnginesButton onChanged={() => void reloadEngines()} /> : null}
           {user.role === "admin" ? <InviteButton /> : null}
           <span className="hidden max-w-40 truncate text-xs text-muted-foreground md:inline">{user.email}</span>
           <Button variant="ghost" size="sm" onClick={onLogout}>
@@ -54,12 +65,12 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
 
       <div className="hidden min-h-0 flex-1 md:grid md:grid-cols-[16rem_minmax(0,1fr)_20rem]">
         <ProjectColumn />
-        <SessionColumn />
+        <SessionColumn engines={engines} inputId="engine" />
         <ContextColumn />
       </div>
 
       <div className="min-h-0 flex-1 md:hidden">
-        <SessionColumn />
+        <SessionColumn engines={engines} inputId="engine-mobile" />
       </div>
 
       <Sheet open={projectsOpen} onOpenChange={setProjectsOpen}>
@@ -178,19 +189,34 @@ function ProjectGroup({ title }: { title: string }) {
   )
 }
 
-function SessionColumn() {
+function SessionColumn({ engines, inputId }: { engines: EngineSummary[]; inputId: string }) {
+  const [selected, setSelected] = useState(engines[0]?.id ?? "")
+
+  useEffect(() => {
+    if (!engines.some((engine) => engine.id === selected)) {
+      setSelected(engines[0]?.id ?? "")
+    }
+  }, [engines, selected])
+
   return (
     <main className="flex h-full min-h-0 flex-col">
       <div className="flex h-12 items-center gap-3 border-b border-border px-4">
-        <label className="text-xs text-muted-foreground" htmlFor="engine">
+        <label className="text-xs text-muted-foreground" htmlFor={inputId}>
           Motore
         </label>
         <select
-          id="engine"
-          disabled
-          className="h-8 rounded-md border border-border bg-background px-2 text-sm text-muted-foreground"
+          id={inputId}
+          disabled={engines.length === 0}
+          value={selected}
+          onChange={(event) => setSelected(event.target.value)}
+          className="h-8 max-w-56 rounded-md border border-border bg-background px-2 text-sm disabled:text-muted-foreground"
         >
-          <option>Nessun motore</option>
+          {engines.length === 0 ? <option value="">Nessun motore</option> : null}
+          {engines.map((engine) => (
+            <option key={engine.id} value={engine.id}>
+              {engine.name}
+            </option>
+          ))}
         </select>
       </div>
       <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
@@ -199,11 +225,11 @@ function SessionColumn() {
         </p>
       </div>
       <form className="border-t border-border p-3" onSubmit={(event) => event.preventDefault()}>
-        <label className="sr-only" htmlFor="composer">
+        <label className="sr-only" htmlFor={`${inputId}-composer`}>
           Messaggio
         </label>
         <textarea
-          id="composer"
+          id={`${inputId}-composer`}
           disabled
           rows={3}
           placeholder="Scrivi al motore quando una sessione è aperta"

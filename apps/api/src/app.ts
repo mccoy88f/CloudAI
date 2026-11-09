@@ -1,5 +1,5 @@
 import { createNodeWebSocket } from "@hono/node-ws"
-import type { HealthReport, PublicUser, SessionSocketEvent, SetupState, SetupStep } from "@cloudai/shared"
+import type { EngineKind, HealthReport, PublicUser, SessionSocketEvent, SetupState, SetupStep } from "@cloudai/shared"
 import type { Context, MiddlewareHandler } from "hono"
 import { deleteCookie, getCookie, setCookie } from "hono/cookie"
 import { Hono } from "hono"
@@ -15,6 +15,7 @@ import {
 } from "./accounts.js"
 import { encryptSecret, hashPassword, verifyPassword } from "./crypto.js"
 import { readCreatedAt, readState, sql, writeState } from "./db.js"
+import { disableEngine, insertEngine, isUniqueName, listEngines, probeOpenAI, reconnectEngine } from "./engines.js"
 
 const COOKIE = "cloudai_session"
 const runnerUrl = process.env.RUNNER_URL ?? "http://runner:4000"
@@ -29,7 +30,7 @@ export function createApp() {
   return { app, injectWebSocket }
 }
 
-function fail(c: AppContext, status: 400 | 401 | 403 | 409 | 410, error: string) {
+function fail(c: AppContext, status: 400 | 401 | 403 | 404 | 409 | 410, error: string) {
   return c.json({ error }, status)
 }
 
@@ -196,6 +197,58 @@ app.post("/api/setup/preview", requireUser, requireAdmin, async (c) => {
   return c.json(await readSetup())
 })
 
+app.get("/api/engines", requireUser, async (c) => {
+  const engines = await listEngines()
+  if (c.get("user").role === "admin") return c.json(engines)
+  return c.json(engines.filter((engine) => engine.status === "connected"))
+})
+
+app.post("/api/engines", requireUser, requireAdmin, async (c) => {
+  const setup = await readSetup()
+  if (!setup.completed) return fail(c, 409, "Concludi la configurazione prima di aggiungere un motore")
+  const body = await c.req.json().catch(() => null)
+  const parsed = readEngineInput(body)
+  if (!parsed) return fail(c, 400, "Nome, tipo e credenziale non sono validi")
+  if (parsed.kind === "openai") {
+    const reachable = await probeOpenAI(parsed.baseUrl ?? "", parsed.secret).catch(() => false)
+    if (!reachable) return fail(c, 400, "L'endpoint OpenAI non risponde con questa chiave")
+  }
+  try {
+    const engine = await insertEngine(parsed)
+    return c.json(engine, 201)
+  } catch (error) {
+    if (isUniqueName(error)) return fail(c, 409, "Esiste già un motore con questo nome")
+    return fail(c, 400, error instanceof Error ? error.message : "Motore non creato")
+  }
+})
+
+app.post("/api/engines/:id/reconnect", requireUser, requireAdmin, async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const secret = readSecret(body?.apiKey)
+  if (!secret) return fail(c, 400, "Serve la credenziale, almeno 8 caratteri")
+  const baseUrl = body?.baseUrl == null || body.baseUrl === "" ? null : readPublicUrl(body.baseUrl)
+  const model = body?.model == null || body.model === "" ? null : readModel(body.model)
+  if (body?.baseUrl && !baseUrl) return fail(c, 400, "URL non valido")
+  if (typeof body?.model === "string" && body.model !== "" && !model) return fail(c, 400, "Modello non valido")
+  if (baseUrl) {
+    const reachable = await probeOpenAI(baseUrl, secret).catch(() => false)
+    if (!reachable) return fail(c, 400, "L'endpoint OpenAI non risponde con questa chiave")
+  }
+  try {
+    const engine = await reconnectEngine(c.req.param("id"), { secret, baseUrl, model })
+    if (!engine) return fail(c, 404, "Motore assente")
+    return c.json(engine)
+  } catch (error) {
+    return fail(c, 400, error instanceof Error ? error.message : "Motore non ricollegato")
+  }
+})
+
+app.post("/api/engines/:id/disable", requireUser, requireAdmin, async (c) => {
+  const engine = await disableEngine(c.req.param("id"))
+  if (!engine) return fail(c, 404, "Motore assente")
+  return c.json(engine)
+})
+
 app.post("/api/invites", requireUser, requireAdmin, async (c) => {
   const setup = await readSetup()
   if (!setup.completed) return fail(c, 409, "Concludi la configurazione prima di invitare")
@@ -289,6 +342,38 @@ function readPublicUrl(value: unknown): string | null {
   } catch {
     return null
   }
+}
+
+function readEngineInput(body: {
+  name?: unknown
+  kind?: unknown
+  apiKey?: unknown
+  baseUrl?: unknown
+  model?: unknown
+} | null): { name: string; kind: EngineKind; secret: string; baseUrl: string | null; model: string | null } | null {
+  if (!body) return null
+  const name = typeof body.name === "string" ? body.name.trim() : ""
+  const kind = readEngineKind(body.kind)
+  const secret = readSecret(body.apiKey)
+  if (!kind || !secret || name.length < 1 || name.length > 80) return null
+  if (kind === "openai") {
+    const baseUrl = readPublicUrl(body.baseUrl)
+    const model = readModel(body.model)
+    if (!baseUrl || !model) return null
+    return { name, kind, secret, baseUrl, model }
+  }
+  return { name, kind, secret, baseUrl: null, model: null }
+}
+
+function readEngineKind(value: unknown): EngineKind | null {
+  if (value === "claude" || value === "cursor" || value === "gemini" || value === "openai") return value
+  return null
+}
+
+function readModel(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const model = value.trim()
+  return model.length >= 1 && model.length <= 100 ? model : null
 }
 
 function readHostname(value: unknown): string | null {
