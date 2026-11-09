@@ -7,7 +7,7 @@
     "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --packages=external --alias:@cloudai/shared=../../packages/shared/src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/crypto.test.ts"
+    "test": "tsx --test src/crypto.test.ts src/github-jwt.test.ts"
   },
   "dependencies": {
     "@cloudai/shared": "*",

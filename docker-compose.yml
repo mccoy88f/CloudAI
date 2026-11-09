@@ -60,6 +60,16 @@ services:
       PORT: "4000"
       WORKSPACES_DIR: /workspaces
       ENGINES_DIR: /engines
+      PREVIEW_DOMAIN: ${PREVIEW_DOMAIN:-preview.invalid}
+    labels:
+      - traefik.enable=true
+      - "traefik.http.routers.cloudai-preview.rule=HostRegexp(`{name:[a-z0-9-]+}.${PREVIEW_DOMAIN:-preview.invalid}`)"
+      - traefik.http.routers.cloudai-preview.entrypoints=https
+      - traefik.http.routers.cloudai-preview.tls=true
+      - traefik.http.routers.cloudai-preview.tls.certresolver=letsencrypt
+      - traefik.http.routers.cloudai-preview.priority=1
+      - traefik.http.routers.cloudai-preview.service=cloudai-preview
+      - traefik.http.services.cloudai-preview.loadbalancer.server.port=4000
     expose:
       - "4000"
     volumes:

@@ -165,7 +165,7 @@ Finito quando il dev server del progetto risponde su quel dominio da desktop e d
 
 ### 9. GitHub
 
-Clone in creazione, branch in barra, commit e pull request con l’account GitHub dell’utente. La App è già configurata dalla fase 2.
+Clone in creazione, branch in barra, commit a nome dell'utente CloudAI, push e pull request tramite la GitHub App già configurata. I repository privati funzionano se la App è installata su di essi.
 
 Finito quando un progetto nasce da un repository e una modifica fatta in sessione o nell’editor diventa una pull request.
 

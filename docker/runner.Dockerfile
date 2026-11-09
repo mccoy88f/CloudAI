@@ -15,7 +15,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PATH="/root/.local/bin:${PATH}"
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git python3 ripgrep ca-certificates curl \
+  && apt-get install -y --no-install-recommends git python3 python3-venv ripgrep ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/

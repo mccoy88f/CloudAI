@@ -1,8 +1,11 @@
 import type { EngineSummary, ProjectSummary, PublicUser } from "@cloudai/shared"
-import { Globe, Menu, Package, PanelRight } from "lucide-react"
+import { Menu, PanelRight } from "lucide-react"
 import { useCallback, useEffect, useState, lazy, Suspense, type ReactNode } from "react"
 import { EnginesButton } from "@/components/engines-panel"
 import { FileTree } from "@/components/file-tree"
+import { GitBar } from "@/components/git-bar"
+import { DomainsPanel } from "@/components/domains-panel"
+import { PackagesPanel } from "@/components/packages-panel"
 import { ProjectColumn } from "@/components/project-column"
 import { SessionPanel, useProjectSession } from "@/components/session-panel"
 import { Badge } from "@/components/ui/badge"
@@ -100,48 +103,53 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
             onChanged={reloadProjects}
             formId="desk"
           />
-          {selected && openPath ? (
-            <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Apro l’editor…</p>}>
-              <FileEditor
-                project={selected}
-                path={openPath}
-                fullscreen={false}
-                onClose={() => setOpenPath(null)}
-                onSaved={() => setTreeRevision((value) => value + 1)}
-                onProject={(project) =>
-                  setProjects((current) => current.map((item) => (item.id === project.id ? project : item)))
-                }
-              />
-            </Suspense>
-          ) : (
-            <SessionPanel engines={engines} project={selected} session={session} inputId="engine" />
-          )}
+          <WorkColumn project={selected} onChanged={reloadProjects}>
+            {selected && openPath ? (
+              <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Apro l’editor…</p>}>
+                <FileEditor
+                  project={selected}
+                  path={openPath}
+                  fullscreen={false}
+                  onClose={() => setOpenPath(null)}
+                  onSaved={() => setTreeRevision((value) => value + 1)}
+                  onProject={(project) =>
+                    setProjects((current) => current.map((item) => (item.id === project.id ? project : item)))
+                  }
+                />
+              </Suspense>
+            ) : (
+              <SessionPanel engines={engines} project={selected} session={session} inputId="engine" />
+            )}
+          </WorkColumn>
           <ContextColumn
             project={selected}
             openPath={openPath}
             revision={treeRevision}
             onOpen={openFile}
             onCreated={() => setTreeRevision((value) => value + 1)}
+            formId="desk"
           />
         </div>
       ) : (
         <div className="min-h-0 flex-1 md:hidden">
-          {selected && openPath ? (
-            <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Apro l’editor…</p>}>
-              <FileEditor
-                project={selected}
-                path={openPath}
-                fullscreen
-                onClose={() => setOpenPath(null)}
-                onSaved={() => setTreeRevision((value) => value + 1)}
-                onProject={(project) =>
-                  setProjects((current) => current.map((item) => (item.id === project.id ? project : item)))
-                }
-              />
-            </Suspense>
-          ) : (
-            <SessionPanel engines={engines} project={selected} session={session} inputId="engine-mobile" />
-          )}
+          <WorkColumn project={selected} onChanged={reloadProjects}>
+            {selected && openPath ? (
+              <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Apro l’editor…</p>}>
+                <FileEditor
+                  project={selected}
+                  path={openPath}
+                  fullscreen
+                  onClose={() => setOpenPath(null)}
+                  onSaved={() => setTreeRevision((value) => value + 1)}
+                  onProject={(project) =>
+                    setProjects((current) => current.map((item) => (item.id === project.id ? project : item)))
+                  }
+                />
+              </Suspense>
+            ) : (
+              <SessionPanel engines={engines} project={selected} session={session} inputId="engine-mobile" />
+            )}
+          </WorkColumn>
         </div>
       )}
 
@@ -167,6 +175,7 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
             revision={treeRevision}
             onOpen={openFile}
             onCreated={() => setTreeRevision((value) => value + 1)}
+            formId="mobile"
           />
         </SheetContent>
       </Sheet>
@@ -244,18 +253,37 @@ function InviteButton() {
   )
 }
 
+function WorkColumn({
+  project,
+  onChanged,
+  children,
+}: {
+  project: ProjectSummary | null
+  onChanged: () => Promise<void>
+  children: ReactNode
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {project?.repo ? <GitBar key={project.id} project={project} onChanged={onChanged} /> : null}
+      <div className="min-h-0 flex-1">{children}</div>
+    </div>
+  )
+}
+
 function ContextColumn({
   project,
   openPath,
   revision,
   onOpen,
   onCreated,
+  formId,
 }: {
   project: ProjectSummary | null
   openPath: string | null
   revision: number
   onOpen: (path: string) => void
   onCreated: () => void
+  formId: string
 }) {
   return (
     <aside className="flex h-full min-h-0 flex-col border-border md:border-l">
@@ -268,23 +296,14 @@ function ContextColumn({
         <TabsContent value="files">
           <FileTree project={project} openPath={openPath} revision={revision} onOpen={onOpen} onCreated={onCreated} />
         </TabsContent>
-        <TabsContent value="packages">
-          <EmptyPanel icon={<Package className="size-4" />} text="Nessun pacchetto" />
+        <TabsContent value="packages" className="overflow-hidden">
+          <PackagesPanel project={project} formId={`${formId}-pkg`} />
         </TabsContent>
-        <TabsContent value="domains">
-          <EmptyPanel icon={<Globe className="size-4" />} text="Nessun dominio" />
+        <TabsContent value="domains" className="overflow-hidden">
+          <DomainsPanel project={project} formId={`${formId}-dom`} />
         </TabsContent>
       </Tabs>
     </aside>
-  )
-}
-
-function EmptyPanel({ icon, text }: { icon: ReactNode; text: string }) {
-  return (
-    <div className="flex h-full items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
-      {icon}
-      {text}
-    </div>
   )
 }
 

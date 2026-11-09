@@ -30,6 +30,22 @@ import {
   updateMemberRole,
 } from "./projects.js"
 import { bindProjectSession } from "./session.js"
+import {
+  addProjectPackage,
+  listProjectPackages,
+  projectBranch,
+  projectCommitAndPush,
+  projectGit,
+  projectPullRequest,
+  removeProjectPackage,
+} from "./gitops.js"
+import {
+  createProjectPreview,
+  deleteProjectPreview,
+  listProjectPreviews,
+  startProjectPreview,
+  stopProjectPreview,
+} from "./previews.js"
 
 const COOKIE = "cloudai_session"
 const runnerUrl = process.env.RUNNER_URL ?? "http://runner:4000"
@@ -272,9 +288,10 @@ app.post("/api/projects", requireUser, async (c) => {
   if (!setup.completed) return fail(c, 409, "Concludi la configurazione prima di creare un progetto")
   const body = await c.req.json().catch(() => null)
   const name = readProjectName(body?.name)
+  const repo = typeof body?.repo === "string" && body.repo.trim() ? body.repo.trim() : null
   if (!name) return fail(c, 400, "Serve un nome, fino a 80 caratteri")
   try {
-    return c.json(await createProject(c.get("user").id, name), 201)
+    return c.json(await createProject(c.get("user").id, name, repo), 201)
   } catch (error) {
     return fail(c, 400, error instanceof Error ? error.message : "Progetto non creato")
   }
@@ -415,6 +432,101 @@ async function proxyFile(c: AppContext, method: "GET" | "PUT") {
     return c.json(body)
   } catch {
     return fail(c, 400, "Il runner non risponde")
+  }
+}
+
+app.get("/api/projects/:id/packages", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  return runJson(c, () => listProjectPackages(c.req.param("id")))
+})
+
+app.post("/api/projects/:id/packages", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  const body = await c.req.json().catch(() => null)
+  return runJson(c, () => addProjectPackage(c.req.param("id"), body?.manager, body?.spec))
+})
+
+app.delete("/api/projects/:id/packages", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  const body = await c.req.json().catch(() => null)
+  return runJson(c, () => removeProjectPackage(c.req.param("id"), body?.manager, body?.name))
+})
+
+app.get("/api/projects/:id/git", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  return runJson(c, () => projectGit(c.req.param("id")))
+})
+
+app.post("/api/projects/:id/git/branch", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  const body = await c.req.json().catch(() => null)
+  return runJson(c, () => projectBranch(c.req.param("id"), body?.name))
+})
+
+app.post("/api/projects/:id/git/commit", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  const body = await c.req.json().catch(() => null)
+  return runJson(c, () => projectCommitAndPush(c.req.param("id"), body?.message, c.get("user").email))
+})
+
+app.post("/api/projects/:id/git/pull", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  const body = await c.req.json().catch(() => null)
+  return runJson(c, () => projectPullRequest(c.req.param("id"), body?.title))
+})
+
+app.get("/api/projects/:id/previews", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  return runJson(c, () => listProjectPreviews(c.req.param("id")))
+})
+
+app.post("/api/projects/:id/previews", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  const body = await c.req.json().catch(() => null)
+  return runJson(c, () => createProjectPreview(c.req.param("id"), body ?? {}))
+})
+
+app.post("/api/projects/:id/previews/:previewId/start", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  return runJson(c, () => startProjectPreview(c.req.param("id"), c.req.param("previewId")))
+})
+
+app.post("/api/projects/:id/previews/:previewId/stop", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  return runJson(c, () => stopProjectPreview(c.req.param("id"), c.req.param("previewId")))
+})
+
+app.delete("/api/projects/:id/previews/:previewId", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  try {
+    const removed = await deleteProjectPreview(c.req.param("id"), c.req.param("previewId"))
+    if (!removed) return fail(c, 404, "Preview assente")
+    return c.json({ ok: true })
+  } catch (error) {
+    return fail(c, 400, error instanceof Error ? error.message : "Preview non eliminata")
+  }
+})
+
+async function runJson<T>(c: AppContext, job: () => Promise<T>) {
+  if (!c.req.param("id")) return fail(c, 404, "Progetto assente")
+  try {
+    return c.json(await job())
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Operazione non riuscita"
+    if (message === "Preview assente" || message === "Progetto assente") return fail(c, 404, message)
+    return fail(c, 400, message)
   }
 }
 

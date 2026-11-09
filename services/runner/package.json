@@ -4,10 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --packages=external",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --packages=external --alias:@cloudai/shared=../../packages/shared/src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/parse.test.ts src/files.test.ts"
+    "test": "tsx --test src/parse.test.ts src/files.test.ts src/ops.test.ts"
   },
   "dependencies": {
     "@cloudai/shared": "*",

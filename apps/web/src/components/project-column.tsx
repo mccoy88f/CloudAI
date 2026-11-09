@@ -30,6 +30,7 @@ export function ProjectColumn({
 }) {
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState("")
+  const [repo, setRepo] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const selected = projects.find((project) => project.id === selectedId) ?? null
@@ -55,9 +56,10 @@ export function ProjectColumn({
             try {
               const project = await api<ProjectSummary>("/api/projects", {
                 method: "POST",
-                body: JSON.stringify({ name }),
+                body: JSON.stringify({ name, repo }),
               })
               setName("")
+              setRepo("")
               setCreating(false)
               await onChanged()
               onSelect(project.id)
@@ -70,6 +72,16 @@ export function ProjectColumn({
         >
           <Label htmlFor={`${formId}-name`}>Nome</Label>
           <Input id={`${formId}-name`} required value={name} onChange={(event) => setName(event.target.value)} />
+          <Label htmlFor={`${formId}-repo`}>Repository</Label>
+          <Input
+            id={`${formId}-repo`}
+            value={repo}
+            placeholder="org/repo"
+            onChange={(event) => setRepo(event.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Facoltativo. Anche un repository privato, se la GitHub App è installata. Con il solo nome vale l’organizzazione del wizard.
+          </p>
           {error ? <p className="text-sm text-red-400">{error}</p> : null}
           <Button type="submit" size="sm" disabled={pending}>
             Crea

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process"
+import path from "node:path"
 import type { EngineKind, RunnerEvent } from "@cloudai/shared"
 import { commandFor, createClaudeParser, createCursorParser, createGeminiParser, modelPrompt } from "./parse.js"
 
@@ -144,7 +145,12 @@ function startCli(live: Live, spec: SessionSpec): void {
   const home = `${enginesDir}/${spec.engineId}`
   live.home = home
   const args = argsFor(spec, prompt)
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: home }
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    CLAUDE_CONFIG_DIR: home,
+    PATH: `${live.cwd}/.cloudai/venv/bin${path.delimiter}${process.env.PATH ?? ""}`,
+  }
   if (spec.kind === "claude") env.ANTHROPIC_API_KEY = spec.secret
   if (spec.kind === "cursor") env.CURSOR_API_KEY = spec.secret
   if (spec.kind === "gemini") env.GEMINI_API_KEY = spec.secret

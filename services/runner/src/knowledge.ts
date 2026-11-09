@@ -86,9 +86,11 @@ async function writeKnowledge(projectDir: string): Promise<void> {
   } catch {
     current = ""
   }
-  const line = ".cloudai/journal/"
-  if (current.split("\n").some((item) => item.trim() === line)) return
-  const next = current.length === 0 ? `${line}\n` : `${current.replace(/\n?$/, "\n")}${line}\n`
+  const wanted = [".cloudai/journal/", ".cloudai/venv/", "node_modules/"]
+  const present = new Set(current.split("\n").map((item) => item.trim()))
+  const missing = wanted.filter((item) => !present.has(item))
+  if (missing.length === 0) return
+  const next = current.length === 0 ? `${missing.join("\n")}\n` : `${current.replace(/\n?$/, "\n")}${missing.join("\n")}\n`
   await writeFile(gitignore, next)
 }
 

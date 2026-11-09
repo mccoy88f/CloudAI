@@ -1,12 +1,17 @@
-import { serve } from "@hono/node-server"
+import { getRequestListener } from "@hono/node-server"
 import { mkdir, rm, stat } from "node:fs/promises"
+import { createServer } from "node:http"
 import path from "node:path"
 import { streamSSE } from "hono/streaming"
 import { Hono } from "hono"
 import type { EngineKind } from "@cloudai/shared"
+import { readBranchName, readPort, splitCommand } from "@cloudai/shared"
 import { permission, stop, submit, subscribe, type SessionSpec } from "./live.js"
 import { listFiles, readBytes, readDocument, writeDocument } from "./files.js"
+import { checkoutBranch, cloneRepo, commitAll, gitSnapshot, pushHead } from "./git.js"
 import { appendArchive, ensureProjectKnowledge, projectMemory } from "./knowledge.js"
+import { addPackage, listPackages, removePackage } from "./packages.js"
+import { forgetPreview, handlePreviewHttp, handlePreviewUpgrade, previewStates, startPreview, stopAllPreviews, stopPreview, stopProject } from "./previews.js"
 
 const port = Number(process.env.PORT ?? 4000)
 const workspacesDir = process.env.WORKSPACES_DIR ?? "/workspaces"
@@ -33,13 +38,21 @@ app.post("/projects/:id", async (c) => {
   const dir = inside(workspacesDir, c.req.param("id"))
   if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
   await mkdir(dir, { recursive: true, mode: 0o700 })
-  await ensureProjectKnowledge(dir)
   return c.json({ ok: true, dir })
 })
 
-app.delete("/projects/:id", async (c) => {
+app.post("/projects/:id/knowledge", async (c) => {
   const dir = inside(workspacesDir, c.req.param("id"))
   if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  await ensureProjectKnowledge(dir)
+  return c.json({ ok: true })
+})
+
+app.delete("/projects/:id", async (c) => {
+  const id = c.req.param("id")
+  const dir = inside(workspacesDir, id)
+  if (!dir || !id) return c.json({ error: "Identificativo non valido" }, 400)
+  stopProject(id)
   await rm(dir, { recursive: true, force: true })
   return c.json({ ok: true })
 })
@@ -105,6 +118,137 @@ app.get("/projects/:id/memory", async (c) => {
   const dir = inside(workspacesDir, c.req.param("id"))
   if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
   return c.json({ text: await projectMemory(dir) })
+})
+
+app.get("/projects/:id/packages", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  if (!(await exists(dir))) return c.json({ error: "Progetto assente" }, 404)
+  return c.json(await listPackages(dir))
+})
+
+app.post("/projects/:id/packages", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  const body = await c.req.json().catch(() => null)
+  const manager = typeof body?.manager === "string" ? body.manager : ""
+  const spec = typeof body?.spec === "string" ? body.spec : ""
+  try {
+    return c.json(await addPackage(dir, manager, spec))
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Pacchetto non installato" }, 400)
+  }
+})
+
+app.delete("/projects/:id/packages", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  const body = await c.req.json().catch(() => null)
+  const manager = typeof body?.manager === "string" ? body.manager : ""
+  const name = typeof body?.name === "string" ? body.name : ""
+  try {
+    return c.json(await removePackage(dir, manager, name))
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Pacchetto non rimosso" }, 400)
+  }
+})
+
+app.get("/projects/:id/git", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  try {
+    return c.json(await gitSnapshot(dir))
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Stato git assente" }, 400)
+  }
+})
+
+app.post("/projects/:id/git/clone", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  const body = await c.req.json().catch(() => null)
+  const remote = typeof body?.remote === "string" ? body.remote : ""
+  const token = typeof body?.token === "string" ? body.token : ""
+  try {
+    return c.json({ branch: await cloneRepo(dir, remote, token) })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Clone non riuscito" }, 400)
+  }
+})
+
+app.post("/projects/:id/git/branch", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  const body = await c.req.json().catch(() => null)
+  const name = typeof body?.name === "string" ? body.name : ""
+  if (!readBranchName(name)) return c.json({ error: "Nome branch non valido" }, 400)
+  try {
+    return c.json({ branch: await checkoutBranch(dir, name) })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Branch non creato" }, 400)
+  }
+})
+
+app.post("/projects/:id/git/commit", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  const body = await c.req.json().catch(() => null)
+  const message = typeof body?.message === "string" ? body.message : ""
+  const authorName = typeof body?.authorName === "string" ? body.authorName : ""
+  const authorEmail = typeof body?.authorEmail === "string" ? body.authorEmail : ""
+  try {
+    await commitAll(dir, message, authorName, authorEmail)
+    return c.json({ ok: true, branch: (await gitSnapshot(dir)).branch })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Commit non riuscito" }, 400)
+  }
+})
+
+app.post("/projects/:id/git/push", async (c) => {
+  const dir = inside(workspacesDir, c.req.param("id"))
+  if (!dir) return c.json({ error: "Identificativo non valido" }, 400)
+  const body = await c.req.json().catch(() => null)
+  const token = typeof body?.token === "string" ? body.token : ""
+  try {
+    await pushHead(dir, token)
+    return c.json({ ok: true })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Push non riuscito" }, 400)
+  }
+})
+
+app.get("/previews", (c) => c.json(previewStates()))
+
+app.post("/previews/start", async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const projectId = typeof body?.projectId === "string" ? body.projectId : ""
+  const dir = inside(workspacesDir, projectId)
+  const host = typeof body?.host === "string" ? body.host.trim().toLowerCase() : ""
+  const portNumber = readPort(body?.port)
+  const command = typeof body?.command === "string" ? body.command : ""
+  if (!dir || !portNumber || !splitCommand(command)) return c.json({ error: "Preview non valida" }, 400)
+  if (!(await exists(dir))) return c.json({ error: "Progetto assente" }, 404)
+  try {
+    return c.json(await startPreview({ projectId, projectDir: dir, host, port: portNumber, command }))
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Preview non avviata" }, 400)
+  }
+})
+
+app.post("/previews/stop", async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const host = typeof body?.host === "string" ? body.host.trim().toLowerCase() : ""
+  if (!host) return c.json({ error: "Host assente" }, 400)
+  stopPreview(host)
+  return c.json({ ok: true })
+})
+
+app.delete("/previews", async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const host = typeof body?.host === "string" ? body.host.trim().toLowerCase() : ""
+  if (!host) return c.json({ error: "Host assente" }, 400)
+  forgetPreview(host)
+  return c.json({ ok: true })
 })
 
 app.get("/sessions/:projectId/events", (c) => {
@@ -197,5 +341,19 @@ async function exists(target: string): Promise<boolean> {
   }
 }
 
-serve({ fetch: app.fetch, port })
-console.log(`runner listening on ${port}`)
+const listener = getRequestListener(app.fetch)
+const server = createServer((req, res) => {
+  if (handlePreviewHttp(req, res)) return
+  void listener(req, res)
+})
+server.on("upgrade", (req, socket, head) => {
+  if (handlePreviewUpgrade(req, socket, head)) return
+  socket.destroy()
+})
+server.listen(port, () => {
+  console.log(`runner listening on ${port}`)
+})
+process.on("SIGTERM", () => {
+  stopAllPreviews()
+  server.close()
+})
