@@ -11,6 +11,8 @@ Workspace web per progetti locali guidati da CLI di agenti. Il piano di sviluppo
 
 Il browser parla solo con `web`. Nginx inoltra `/api`, compreso il WebSocket `/api/ws`, al servizio `api`, con timeout di un'ora. `api` e `runner` non sono pubblicati.
 
+Al primo accesso l'interfaccia chiede l'amministratore, la GitHub App, la cartella progetti, l'URL pubblico e il dominio delle preview. La chiave della App e il webhook secret restano cifrati con `SERVICE_PASSWORD_APP`. Da quel momento il wizard non si ripresenta. L'amministratore invita gli altri utenti con un link monouso.
+
 Il dominio wildcard delle preview (`*.preview.…`) arriva con la fase dei server locali. Non va messo nel campo dominio di Coolify: Traefik rifiuta `Host(\`*.…\`)`.
 
 ## Locale

@@ -10,3 +10,27 @@ export type HealthReport = {
 export type SessionSocketEvent =
   | { type: "ready" }
   | { type: "ping"; at: string }
+
+export type UserRole = "admin" | "member"
+
+export type PublicUser = {
+  id: string
+  email: string
+  role: UserRole
+}
+
+export type SetupStep = "admin" | "github" | "folder" | "url" | "preview" | "done"
+
+export type SetupState = {
+  completed: boolean
+  hasAdmin: boolean
+  step: SetupStep
+  github: {
+    configured: boolean
+    appId: string
+    organization: string
+  }
+  workspacesDir: string
+  publicUrl: string
+  previewDomain: string
+}

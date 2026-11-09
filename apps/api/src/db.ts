@@ -20,6 +20,50 @@ export async function ensureSchema(): Promise<void> {
     values ('created_at', now()::text)
     on conflict (key) do nothing
   `
+  await sql`
+    create table if not exists users (
+      id uuid primary key default gen_random_uuid(),
+      email text not null unique,
+      password_hash text not null,
+      role text not null check (role in ('admin', 'member')),
+      created_at timestamptz not null default now()
+    )
+  `
+  await sql`
+    create table if not exists sessions (
+      token_hash text primary key,
+      user_id uuid not null references users (id) on delete cascade,
+      expires_at timestamptz not null,
+      created_at timestamptz not null default now()
+    )
+  `
+  await sql`
+    create table if not exists invites (
+      id uuid primary key default gen_random_uuid(),
+      email text not null,
+      token_hash text not null unique,
+      created_by uuid not null references users (id),
+      expires_at timestamptz not null,
+      accepted_at timestamptz,
+      created_at timestamptz not null default now()
+    )
+  `
+}
+
+export async function readState(key: string): Promise<string | null> {
+  const rows = await sql<{ value: string }[]>`
+    select value from instance_state where key = ${key}
+  `
+  return rows[0]?.value ?? null
+}
+
+export async function writeState(key: string, value: string): Promise<void> {
+  await sql`
+    insert into instance_state (key, value)
+    values (${key}, ${value})
+    on conflict (key) do update
+    set value = excluded.value, updated_at = now()
+  `
 }
 
 export async function readCreatedAt(): Promise<string | null> {

@@ -28,6 +28,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://cloudai:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/cloudai
+      APP_SECRET: ${SERVICE_PASSWORD_APP:?set SERVICE_PASSWORD_APP}
       RUNNER_URL: http://runner:4000
       PORT: "3000"
     expose:
