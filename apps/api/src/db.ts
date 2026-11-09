@@ -63,6 +63,23 @@ export async function ensureSchema(): Promise<void> {
   await sql`
     create unique index if not exists engines_name_lower on engines (lower(name))
   `
+  await sql`
+    create table if not exists projects (
+      id uuid primary key,
+      name text not null,
+      slug text not null unique,
+      created_by uuid not null references users (id),
+      created_at timestamptz not null default now()
+    )
+  `
+  await sql`
+    create table if not exists memberships (
+      project_id uuid not null references projects (id) on delete cascade,
+      user_id uuid not null references users (id) on delete cascade,
+      role text not null check (role in ('owner', 'editor', 'viewer')),
+      primary key (project_id, user_id)
+    )
+  `
 }
 
 export async function readState(key: string): Promise<string | null> {

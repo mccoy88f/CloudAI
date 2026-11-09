@@ -32,6 +32,21 @@ export type EngineSummary = {
   model: string | null
 }
 
+export type ProjectRole = "owner" | "editor" | "viewer"
+
+export type ProjectSummary = {
+  id: string
+  name: string
+  role: ProjectRole
+  canWrite: boolean
+}
+
+export type ProjectMember = {
+  id: string
+  email: string
+  role: ProjectRole
+}
+
 export type SetupStep = "admin" | "github" | "folder" | "url" | "preview" | "done"
 
 export type SetupState = {

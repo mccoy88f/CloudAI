@@ -1,13 +1,12 @@
-import type { EngineSummary, PublicUser } from "@cloudai/shared"
-import { Files, FolderClosed, Globe, Menu, Package, PanelRight } from "lucide-react"
+import type { EngineSummary, ProjectSummary, PublicUser } from "@cloudai/shared"
+import { Files, Globe, Menu, Package, PanelRight } from "lucide-react"
 import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { EnginesButton } from "@/components/engines-panel"
+import { ProjectColumn } from "@/components/project-column"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent } from "@/components/ui/sheet"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ApiError, api } from "@/lib/api"
@@ -17,15 +16,24 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
   const [projectsOpen, setProjectsOpen] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
   const [engines, setEngines] = useState<EngineSummary[]>([])
+  const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const status = usePlatformStatus()
+  const selected = projects.find((project) => project.id === selectedId) ?? null
   const reloadEngines = useCallback(async () => {
     const rows = await api<EngineSummary[]>("/api/engines")
     setEngines(rows.filter((engine) => engine.status === "connected"))
   }, [])
+  const reloadProjects = useCallback(async () => {
+    const rows = await api<ProjectSummary[]>("/api/projects")
+    setProjects(rows)
+    setSelectedId((current) => (current && rows.some((project) => project.id === current) ? current : null))
+  }, [])
 
   useEffect(() => {
     void reloadEngines().catch(() => setEngines([]))
-  }, [reloadEngines])
+    void reloadProjects().catch(() => setProjects([]))
+  }, [reloadEngines, reloadProjects])
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
@@ -64,18 +72,36 @@ export function WorkspaceShell({ user, onLogout }: { user: PublicUser; onLogout:
       </header>
 
       <div className="hidden min-h-0 flex-1 md:grid md:grid-cols-[16rem_minmax(0,1fr)_20rem]">
-        <ProjectColumn />
-        <SessionColumn engines={engines} inputId="engine" />
+        <ProjectColumn
+          projects={projects}
+          selectedId={selected?.id ?? null}
+          onSelect={(id) => {
+            setSelectedId(id)
+            setProjectsOpen(false)
+          }}
+          onChanged={reloadProjects}
+          formId="desk"
+        />
+        <SessionColumn engines={engines} project={selected} inputId="engine" />
         <ContextColumn />
       </div>
 
       <div className="min-h-0 flex-1 md:hidden">
-        <SessionColumn engines={engines} inputId="engine-mobile" />
+        <SessionColumn engines={engines} project={selected} inputId="engine-mobile" />
       </div>
 
       <Sheet open={projectsOpen} onOpenChange={setProjectsOpen}>
         <SheetContent side="left" title="Progetti">
-          <ProjectColumn />
+          <ProjectColumn
+            projects={projects}
+            selectedId={selected?.id ?? null}
+            onSelect={(id) => {
+              setSelectedId(id)
+              setProjectsOpen(false)
+            }}
+            onChanged={reloadProjects}
+            formId="mobile"
+          />
         </SheetContent>
       </Sheet>
       <Sheet open={contextOpen} onOpenChange={setContextOpen}>
@@ -157,39 +183,15 @@ function InviteButton() {
   )
 }
 
-function ProjectColumn() {
-  return (
-    <aside className="flex h-full min-h-0 flex-col border-border md:border-r">
-      <div className="flex h-12 items-center justify-between px-4">
-        <h1 className="text-sm font-medium">Progetti</h1>
-        <Button size="sm" variant="outline" disabled>
-          Nuovo
-        </Button>
-      </div>
-      <Separator />
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-6 p-4">
-          <ProjectGroup title="I miei" />
-          <ProjectGroup title="Condivisi con me" />
-        </div>
-      </ScrollArea>
-    </aside>
-  )
-}
-
-function ProjectGroup({ title }: { title: string }) {
-  return (
-    <section className="flex flex-col gap-2">
-      <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{title}</h2>
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <FolderClosed className="size-4" />
-        Nessun progetto
-      </p>
-    </section>
-  )
-}
-
-function SessionColumn({ engines, inputId }: { engines: EngineSummary[]; inputId: string }) {
+function SessionColumn({
+  engines,
+  project,
+  inputId,
+}: {
+  engines: EngineSummary[]
+  project: ProjectSummary | null
+  inputId: string
+}) {
   const [selected, setSelected] = useState(engines[0]?.id ?? "")
 
   useEffect(() => {
@@ -221,7 +223,11 @@ function SessionColumn({ engines, inputId }: { engines: EngineSummary[]; inputId
       </div>
       <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
         <p className="max-w-sm text-sm text-muted-foreground">
-          Seleziona un progetto per aprire la sessione. I messaggi del motore compariranno qui.
+          {project
+            ? project.canWrite
+              ? `${project.name} è pronto. La sessione del motore arriva al passo successivo.`
+              : `${project.name} è in sola lettura. La sessione resta a owner ed editor.`
+            : "Seleziona un progetto per aprire la sessione. I messaggi del motore compariranno qui."}
         </p>
       </div>
       <form className="border-t border-border p-3" onSubmit={(event) => event.preventDefault()}>
@@ -232,7 +238,13 @@ function SessionColumn({ engines, inputId }: { engines: EngineSummary[]; inputId
           id={`${inputId}-composer`}
           disabled
           rows={3}
-          placeholder="Scrivi al motore quando una sessione è aperta"
+          placeholder={
+            !project
+              ? "Seleziona un progetto"
+              : project.canWrite
+                ? "Il messaggio al motore si abilita con la sessione"
+                : "Sola lettura"
+          }
           className="w-full resize-none rounded-md border border-border bg-card px-3 py-2 text-sm outline-none placeholder:text-muted-foreground disabled:opacity-70"
         />
       </form>

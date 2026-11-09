@@ -16,6 +16,17 @@ import {
 import { encryptSecret, hashPassword, verifyPassword } from "./crypto.js"
 import { readCreatedAt, readState, sql, writeState } from "./db.js"
 import { disableEngine, insertEngine, isUniqueName, listEngines, probeOpenAI, reconnectEngine } from "./engines.js"
+import {
+  addMember,
+  createProject,
+  deleteProject,
+  listMembers,
+  listProjects,
+  projectRole,
+  removeMember,
+  renameProject,
+  updateMemberRole,
+} from "./projects.js"
 
 const COOKIE = "cloudai_session"
 const runnerUrl = process.env.RUNNER_URL ?? "http://runner:4000"
@@ -249,6 +260,98 @@ app.post("/api/engines/:id/disable", requireUser, requireAdmin, async (c) => {
   return c.json(engine)
 })
 
+app.get("/api/projects", requireUser, async (c) => {
+  return c.json(await listProjects(c.get("user").id))
+})
+
+app.post("/api/projects", requireUser, async (c) => {
+  const setup = await readSetup()
+  if (!setup.completed) return fail(c, 409, "Concludi la configurazione prima di creare un progetto")
+  const body = await c.req.json().catch(() => null)
+  const name = readProjectName(body?.name)
+  if (!name) return fail(c, 400, "Serve un nome, fino a 80 caratteri")
+  try {
+    return c.json(await createProject(c.get("user").id, name), 201)
+  } catch (error) {
+    return fail(c, 400, error instanceof Error ? error.message : "Progetto non creato")
+  }
+})
+
+app.patch("/api/projects/:id", requireUser, async (c) => {
+  const access = await requireProject(c, true)
+  if (access.error) return access.error
+  const body = await c.req.json().catch(() => null)
+  const name = readProjectName(body?.name)
+  if (!name) return fail(c, 400, "Serve un nome, fino a 80 caratteri")
+  const renamed = await renameProject(c.req.param("id"), name)
+  if (!renamed || !access.role) return fail(c, 404, "Progetto assente")
+  return c.json({
+    id: c.req.param("id"),
+    name,
+    role: access.role,
+    canWrite: access.role !== "viewer",
+  })
+})
+
+app.delete("/api/projects/:id", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  if (access.role !== "owner") return fail(c, 403, "Solo il proprietario può eliminare il progetto")
+  const removed = await deleteProject(c.req.param("id"))
+  if (!removed) return fail(c, 404, "Progetto assente")
+  return c.json({ ok: true })
+})
+
+app.get("/api/projects/:id/members", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  return c.json(await listMembers(c.req.param("id")))
+})
+
+app.post("/api/projects/:id/members", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  if (access.role !== "owner") return fail(c, 403, "Solo il proprietario può condividere il progetto")
+  const body = await c.req.json().catch(() => null)
+  const email = readEmail(body?.email)
+  const role = readMemberRole(body?.role)
+  if (!email || !role) return fail(c, 400, "Email e ruolo non validi")
+  const member = await addMember(c.req.param("id"), email, role)
+  if (member === "missing") return fail(c, 404, "Questa persona non ha ancora un account")
+  if (member === "exists") return fail(c, 409, "Fa già parte del progetto")
+  return c.json(member, 201)
+})
+
+app.patch("/api/projects/:id/members/:userId", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  if (access.role !== "owner") return fail(c, 403, "Solo il proprietario può cambiare i ruoli")
+  const body = await c.req.json().catch(() => null)
+  const role = readMemberRole(body?.role)
+  if (!role) return fail(c, 400, "Ruolo non valido")
+  const updated = await updateMemberRole(c.req.param("id"), c.req.param("userId"), role)
+  if (!updated) return fail(c, 404, "Membro assente")
+  return c.json({ ok: true })
+})
+
+app.delete("/api/projects/:id/members/:userId", requireUser, async (c) => {
+  const access = await requireProject(c, false)
+  if (access.error) return access.error
+  if (access.role !== "owner") return fail(c, 403, "Solo il proprietario può rimuovere un membro")
+  const removed = await removeMember(c.req.param("id"), c.req.param("userId"))
+  if (!removed) return fail(c, 404, "Membro assente")
+  return c.json({ ok: true })
+})
+
+async function requireProject(c: AppContext, write: boolean) {
+  const projectId = c.req.param("id")
+  if (!projectId) return { error: fail(c, 404, "Progetto assente"), role: null }
+  const role = await projectRole(projectId, c.get("user").id)
+  if (!role) return { error: fail(c, 404, "Progetto assente"), role: null }
+  if (write && role === "viewer") return { error: fail(c, 403, "Puoi solo leggere questo progetto"), role }
+  return { error: null, role }
+}
+
 app.post("/api/invites", requireUser, requireAdmin, async (c) => {
   const setup = await readSetup()
   if (!setup.completed) return fail(c, 409, "Concludi la configurazione prima di invitare")
@@ -291,6 +394,17 @@ app.get(
     }
   }),
 )
+
+function readProjectName(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const name = value.trim()
+  return name.length >= 1 && name.length <= 80 ? name : null
+}
+
+function readMemberRole(value: unknown): "editor" | "viewer" | null {
+  if (value === "editor" || value === "viewer") return value
+  return null
+}
 
 function readEmail(value: unknown): string | null {
   if (typeof value !== "string") return null
