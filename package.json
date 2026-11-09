@@ -1,0 +1,19 @@
+{
+  "name": "cloudai",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @cloudai/api -w @cloudai/runner -w @cloudai/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:api": "npm run dev -w @cloudai/api",
+    "dev:runner": "npm run dev -w @cloudai/runner",
+    "dev:web": "npm run dev -w @cloudai/web"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
