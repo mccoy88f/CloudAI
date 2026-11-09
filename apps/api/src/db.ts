@@ -53,8 +53,8 @@ export async function ensureSchema(): Promise<void> {
       id uuid primary key,
       name text not null,
       kind text not null check (kind in ('claude', 'cursor', 'gemini', 'openai')),
-      status text not null check (status in ('connected', 'disabled')),
-      secret_enc text not null,
+      status text not null check (status in ('connected', 'disabled', 'login')),
+      secret_enc text,
       base_url text,
       model text,
       created_at timestamptz not null default now()
@@ -63,6 +63,12 @@ export async function ensureSchema(): Promise<void> {
   await sql`
     create unique index if not exists engines_name_lower on engines (lower(name))
   `
+  await sql`alter table engines drop constraint if exists engines_status_check`
+  await sql`
+    alter table engines add constraint engines_status_check
+    check (status in ('connected', 'disabled', 'login'))
+  `
+  await sql`alter table engines alter column secret_enc drop not null`
   await sql`
     create table if not exists projects (
       id uuid primary key,

@@ -24,6 +24,7 @@ COPY services/runner/package.json services/runner/
 COPY packages/shared/package.json packages/shared/
 RUN npm ci --omit=dev
 COPY --from=build /app/services/runner/dist ./services/runner/dist
+COPY services/runner/src/login_pty.py ./services/runner/dist/login_pty.py
 RUN npm i -g @anthropic-ai/claude-code @google/gemini-cli \
   && (curl -fsSL https://cursor.com/install | bash || echo "cursor install skipped")
 EXPOSE 4000

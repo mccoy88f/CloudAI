@@ -1,5 +1,5 @@
 import type { EngineKind, EngineSummary } from "@cloudai/shared"
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -111,16 +111,22 @@ export function EnginesButton({ onChanged }: { onChanged: () => void }) {
                   </Field>
                 </>
               ) : null}
-              <Field label={kind === "openai" ? "API key" : "Credenziale"} id="engine-key">
-                <Input
-                  id="engine-key"
-                  type="password"
-                  required
-                  minLength={8}
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
-                />
-              </Field>
+              {kind === "claude" || kind === "cursor" ? (
+                <p className="text-xs text-muted-foreground">
+                  Dopo l’aggiunta la CLI mostra un indirizzo. Aprilo, accedi e incolla qui il codice.
+                </p>
+              ) : (
+                <Field label={kind === "openai" ? "API key" : "Credenziale"} id="engine-key">
+                  <Input
+                    id="engine-key"
+                    type="password"
+                    required
+                    minLength={8}
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.target.value)}
+                  />
+                </Field>
+              )}
               {error ? <p className="text-sm text-red-400">{error}</p> : null}
               <Button type="submit" disabled={pending}>
                 Aggiungi
@@ -137,6 +143,8 @@ function EngineRow({ engine, onChanged }: { engine: EngineSummary; onChanged: ()
   const [apiKey, setApiKey] = useState("")
   const [error, setError] = useState<string | null>(null)
   const label = kinds.find((item) => item.id === engine.kind)?.label ?? engine.kind
+  const cli = engine.kind === "claude" || engine.kind === "cursor"
+  const status = engine.status === "connected" ? "collegato" : engine.status === "login" ? "in attesa di accesso" : "disattivato"
 
   return (
     <li className="rounded-md border border-border p-3">
@@ -145,7 +153,7 @@ function EngineRow({ engine, onChanged }: { engine: EngineSummary; onChanged: ()
           <p className="text-sm font-medium">{engine.name}</p>
           <p className="text-xs text-muted-foreground">
             {label}
-            {engine.model ? ` · ${engine.model}` : ""} · {engine.status === "connected" ? "collegato" : "disattivato"}
+            {engine.model ? ` · ${engine.model}` : ""} · {status}
           </p>
         </div>
         {engine.status === "connected" ? (
@@ -162,42 +170,165 @@ function EngineRow({ engine, onChanged }: { engine: EngineSummary; onChanged: ()
           </Button>
         ) : null}
       </div>
+      {cli && engine.status === "login" ? <CliLogin engineId={engine.id} onChanged={onChanged} /> : null}
+      {cli && engine.status !== "login" ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="mt-3"
+          onClick={async () => {
+            setError(null)
+            try {
+              await api(`/api/engines/${engine.id}/login`, { method: "POST" })
+              await onChanged()
+            } catch (caught) {
+              setError(caught instanceof ApiError ? caught.message : "Accesso non avviato")
+            }
+          }}
+        >
+          Accedi
+        </Button>
+      ) : null}
+      {error ? <p className="mt-2 text-sm text-red-400">{error}</p> : null}
+      {cli ? null : (
+        <form
+          className="mt-3 flex flex-col gap-2"
+          onSubmit={async (event) => {
+            event.preventDefault()
+            setError(null)
+            try {
+              await api(`/api/engines/${engine.id}/reconnect`, {
+                method: "POST",
+                body: JSON.stringify({
+                  apiKey,
+                  baseUrl: engine.baseUrl,
+                  model: engine.model,
+                }),
+              })
+              setApiKey("")
+              await onChanged()
+            } catch (caught) {
+              setError(caught instanceof ApiError ? caught.message : "Ricollegamento non riuscito")
+            }
+          }}
+        >
+          <Input
+            type="password"
+            minLength={8}
+            required
+            placeholder="Nuova credenziale"
+            aria-label={`Nuova credenziale per ${engine.name}`}
+            value={apiKey}
+            onChange={(event) => setApiKey(event.target.value)}
+          />
+          <Button type="submit" size="sm" variant="secondary">
+            Ricollega
+          </Button>
+        </form>
+      )}
+    </li>
+  )
+}
+
+function CliLogin({ engineId, onChanged }: { engineId: string; onChanged: () => Promise<void> }) {
+  const [output, setOutput] = useState("")
+  const [url, setUrl] = useState<string | null>(null)
+  const [running, setRunning] = useState(true)
+  const [code, setCode] = useState("")
+  const [error, setError] = useState<string | null>(null)
+
+  const changed = useRef(onChanged)
+  changed.current = onChanged
+
+  useEffect(() => {
+    let stop = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    async function poll() {
+      try {
+        const state = await api<{ output: string; url: string | null; running: boolean; exitCode: number | null }>(
+          `/api/engines/${engineId}/login`,
+        )
+        if (stop) return
+        setOutput(state.output)
+        setUrl(state.url)
+        setRunning(state.running)
+        if (state.exitCode === 0) {
+          await changed.current()
+          return
+        }
+        if (state.exitCode !== null) {
+          setRunning(false)
+          return
+        }
+      } catch (caught) {
+        if (!stop) setError(caught instanceof ApiError ? caught.message : "Accesso non disponibile")
+      }
+      timer = setTimeout(() => void poll(), 1500)
+    }
+    void api(`/api/engines/${engineId}/login`, { method: "POST" })
+      .then(() => poll())
+      .catch((caught: unknown) => {
+        if (!stop) setError(caught instanceof ApiError ? caught.message : "Accesso non avviato")
+      })
+    return () => {
+      stop = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [engineId])
+
+  async function send(text: string) {
+    setError(null)
+    try {
+      const state = await api<{ output: string; url: string | null; running: boolean; exitCode: number | null }>(
+        `/api/engines/${engineId}/login/input`,
+        { method: "POST", body: JSON.stringify({ text }) },
+      )
+      setOutput(state.output)
+      setUrl(state.url)
+      setRunning(state.running)
+      setCode("")
+      if (state.exitCode === 0) await onChanged()
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "Codice non inviato")
+    }
+  }
+
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      <p className="text-xs text-muted-foreground">Apri l’indirizzo, accedi e incolla il codice che compare nel browser.</p>
+      {url ? (
+        <a className="break-all text-sm text-sky-400 underline" href={url} target="_blank" rel="noreferrer">
+          {url}
+        </a>
+      ) : (
+        <p className="text-xs text-muted-foreground">{running ? "In attesa dell’indirizzo…" : "Accesso fermo"}</p>
+      )}
+      {output ? <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-xs">{output}</pre> : null}
       <form
-        className="mt-3 flex flex-col gap-2"
-        onSubmit={async (event) => {
+        className="flex flex-col gap-2"
+        onSubmit={(event) => {
           event.preventDefault()
-          setError(null)
-          try {
-            await api(`/api/engines/${engine.id}/reconnect`, {
-              method: "POST",
-              body: JSON.stringify({
-                apiKey,
-                baseUrl: engine.baseUrl,
-                model: engine.model,
-              }),
-            })
-            setApiKey("")
-            await onChanged()
-          } catch (caught) {
-            setError(caught instanceof ApiError ? caught.message : "Ricollegamento non riuscito")
-          }
+          void send(code)
         }}
       >
         <Input
-          type="password"
-          minLength={8}
-          required
-          placeholder="Nuova credenziale"
-          aria-label={`Nuova credenziale per ${engine.name}`}
-          value={apiKey}
-          onChange={(event) => setApiKey(event.target.value)}
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+          placeholder="Codice"
+          aria-label="Codice di accesso"
         />
-        {error ? <p className="text-sm text-red-400">{error}</p> : null}
-        <Button type="submit" size="sm" variant="secondary">
-          Ricollega
-        </Button>
+        <div className="flex gap-2">
+          <Button type="submit" size="sm" disabled={code.trim().length === 0}>
+            Invia codice
+          </Button>
+          <Button type="button" size="sm" variant="secondary" onClick={() => void send("\n")}>
+            Invio
+          </Button>
+        </div>
       </form>
-    </li>
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+    </div>
   )
 }
 

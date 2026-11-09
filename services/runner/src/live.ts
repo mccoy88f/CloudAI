@@ -7,7 +7,7 @@ export type SessionSpec = {
   projectId: string
   engineId: string
   kind: EngineKind
-  secret: string
+  secret: string | null
   baseUrl: string | null
   model: string | null
   prompt: string
@@ -21,7 +21,7 @@ type Live = {
   projectId: string
   engineId: string
   kind: EngineKind
-  secret: string
+  secret: string | null
   baseUrl: string | null
   model: string | null
   resumeId: string | null
@@ -151,9 +151,12 @@ function startCli(live: Live, spec: SessionSpec): void {
     CLAUDE_CONFIG_DIR: home,
     PATH: `${live.cwd}/.cloudai/venv/bin${path.delimiter}${process.env.PATH ?? ""}`,
   }
-  if (spec.kind === "claude") env.ANTHROPIC_API_KEY = spec.secret
-  if (spec.kind === "cursor") env.CURSOR_API_KEY = spec.secret
-  if (spec.kind === "gemini") env.GEMINI_API_KEY = spec.secret
+  delete env.ANTHROPIC_API_KEY
+  delete env.CURSOR_API_KEY
+  delete env.GEMINI_API_KEY
+  if (spec.kind === "claude" && spec.secret) env.ANTHROPIC_API_KEY = spec.secret
+  if (spec.kind === "cursor" && spec.secret) env.CURSOR_API_KEY = spec.secret
+  if (spec.kind === "gemini" && spec.secret) env.GEMINI_API_KEY = spec.secret
   const child = spawn(command, args, {
     cwd: live.cwd,
     env,

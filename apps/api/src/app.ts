@@ -15,7 +15,7 @@ import {
 } from "./accounts.js"
 import { encryptSecret, hashPassword, verifyPassword } from "./crypto.js"
 import { readCreatedAt, readState, sql, writeState } from "./db.js"
-import { disableEngine, insertEngine, isUniqueName, listEngines, probeOpenAI, reconnectEngine } from "./engines.js"
+import { disableEngine, insertEngine, isUniqueName, listEngines, probeOpenAI, reconnectEngine, beginCliLogin, cliLoginState, sendCliLogin } from "./engines.js"
 import {
   addMember,
   createProject,
@@ -238,8 +238,9 @@ app.post("/api/engines", requireUser, requireAdmin, async (c) => {
   if (!setup.completed) return fail(c, 409, "Concludi la configurazione prima di aggiungere un motore")
   const body = await c.req.json().catch(() => null)
   const parsed = readEngineInput(body)
-  if (!parsed) return fail(c, 400, "Nome, tipo e credenziale non sono validi")
+  if (!parsed) return fail(c, 400, "Nome o tipo non validi")
   if (parsed.kind === "openai") {
+    if (!parsed.secret) return fail(c, 400, "Nome o tipo non validi")
     const reachable = await probeOpenAI(parsed.baseUrl ?? "", parsed.secret).catch(() => false)
     if (!reachable) return fail(c, 400, "L'endpoint OpenAI non risponde con questa chiave")
   }
@@ -277,6 +278,33 @@ app.post("/api/engines/:id/disable", requireUser, requireAdmin, async (c) => {
   const engine = await disableEngine(c.req.param("id"))
   if (!engine) return fail(c, 404, "Motore assente")
   return c.json(engine)
+})
+
+app.post("/api/engines/:id/login", requireUser, requireAdmin, async (c) => {
+  try {
+    return c.json(await beginCliLogin(c.req.param("id")))
+  } catch (error) {
+    return fail(c, 400, error instanceof Error ? error.message : "Accesso non avviato")
+  }
+})
+
+app.get("/api/engines/:id/login", requireUser, requireAdmin, async (c) => {
+  try {
+    return c.json(await cliLoginState(c.req.param("id")))
+  } catch (error) {
+    return fail(c, 400, error instanceof Error ? error.message : "Accesso non disponibile")
+  }
+})
+
+app.post("/api/engines/:id/login/input", requireUser, requireAdmin, async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const text = readLoginText(body?.text)
+  if (!text) return fail(c, 400, "Manca il codice")
+  try {
+    return c.json(await sendCliLogin(c.req.param("id"), text))
+  } catch (error) {
+    return fail(c, 400, error instanceof Error ? error.message : "Codice non inviato")
+  }
 })
 
 app.get("/api/projects", requireUser, async (c) => {
@@ -643,6 +671,14 @@ function readSecret(value: unknown): string | null {
   return secret.length >= 8 && secret.length <= 200 ? secret : null
 }
 
+function readLoginText(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const text = value.replace(/\r/g, "")
+  if (text === "\n") return text
+  const trimmed = text.trim()
+  return trimmed.length >= 1 && trimmed.length <= 400 ? trimmed : null
+}
+
 function readAbsolutePath(value: unknown): string | null {
   if (typeof value !== "string") return null
   const path = value.trim()
@@ -668,12 +704,14 @@ function readEngineInput(body: {
   apiKey?: unknown
   baseUrl?: unknown
   model?: unknown
-} | null): { name: string; kind: EngineKind; secret: string; baseUrl: string | null; model: string | null } | null {
+} | null): { name: string; kind: EngineKind; secret: string | null; baseUrl: string | null; model: string | null } | null {
   if (!body) return null
   const name = typeof body.name === "string" ? body.name.trim() : ""
   const kind = readEngineKind(body.kind)
+  if (!kind || name.length < 1 || name.length > 80) return null
+  if (kind === "claude" || kind === "cursor") return { name, kind, secret: null, baseUrl: null, model: null }
   const secret = readSecret(body.apiKey)
-  if (!kind || !secret || name.length < 1 || name.length > 80) return null
+  if (!secret) return null
   if (kind === "openai") {
     const baseUrl = readPublicUrl(body.baseUrl)
     const model = readModel(body.model)

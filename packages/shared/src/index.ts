@@ -21,7 +21,7 @@ export type PublicUser = {
 
 export type EngineKind = "claude" | "cursor" | "gemini" | "openai"
 
-export type EngineStatus = "connected" | "disabled"
+export type EngineStatus = "connected" | "disabled" | "login"
 
 export type EngineSummary = {
   id: string

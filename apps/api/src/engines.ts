@@ -2,6 +2,7 @@ import type { EngineKind, EngineStatus, EngineSummary } from "@cloudai/shared"
 import { randomUUID } from "node:crypto"
 import { decryptSecret, encryptSecret } from "./crypto.js"
 import { sql } from "./db.js"
+import { callRunner } from "./runner.js"
 
 const runnerUrl = process.env.RUNNER_URL ?? "http://runner:4000"
 
@@ -26,20 +27,21 @@ export async function listEngines(): Promise<EngineSummary[]> {
 export async function insertEngine(input: {
   name: string
   kind: EngineKind
-  secret: string
+  secret: string | null
   baseUrl: string | null
   model: string | null
 }): Promise<EngineSummary> {
   const id = randomUUID()
   if (input.kind !== "openai") await ensureEngineHome(id)
+  const status = input.kind === "claude" || input.kind === "cursor" ? "login" : "connected"
   const rows = await sql<EngineRow[]>`
     insert into engines (id, name, kind, status, secret_enc, base_url, model)
     values (
       ${id},
       ${input.name},
       ${input.kind},
-      'connected',
-      ${encryptSecret(input.secret)},
+      ${status},
+      ${input.secret ? encryptSecret(input.secret) : null},
       ${input.baseUrl},
       ${input.model}
     )
@@ -57,6 +59,7 @@ export async function reconnectEngine(
   const current = await sql<{ kind: EngineKind }[]>`select kind from engines where id = ${id}`
   const kind = current[0]?.kind
   if (!kind) return null
+  if (kind === "claude" || kind === "cursor") throw new Error("Usa l'accesso della CLI")
   if (kind !== "openai") await ensureEngineHome(id)
   const rows = await sql<EngineRow[]>`
     update engines
@@ -80,6 +83,50 @@ export async function disableEngine(id: string): Promise<EngineSummary | null> {
   return rows[0] ?? null
 }
 
+export async function beginCliLogin(id: string): Promise<LoginState> {
+  const kind = await engineKind(id)
+  if (kind !== "claude" && kind !== "cursor") throw new Error("Questo motore non usa l'accesso della CLI")
+  await ensureEngineHome(id)
+  await sql`update engines set status = 'login', secret_enc = null where id = ${id}`
+  const state = await callRunner<LoginState>(`/engines/${id}/login`, {
+    method: "POST",
+    body: JSON.stringify({ kind }),
+  })
+  return settleLogin(id, state)
+}
+
+export async function cliLoginState(id: string): Promise<LoginState> {
+  const state = await callRunner<LoginState>(`/engines/${id}/login`)
+  return settleLogin(id, state)
+}
+
+export async function sendCliLogin(id: string, text: string): Promise<LoginState> {
+  const state = await callRunner<LoginState>(`/engines/${id}/login/input`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  })
+  return settleLogin(id, state)
+}
+
+async function settleLogin(id: string, state: LoginState): Promise<LoginState> {
+  if (state.exitCode === 0) {
+    await sql`update engines set status = 'connected', secret_enc = null where id = ${id}`
+  }
+  return state
+}
+
+async function engineKind(id: string): Promise<EngineKind | null> {
+  const rows = await sql<{ kind: EngineKind }[]>`select kind from engines where id = ${id}`
+  return rows[0]?.kind ?? null
+}
+
+type LoginState = {
+  output: string
+  url: string | null
+  running: boolean
+  exitCode: number | null
+}
+
 export async function probeOpenAI(baseUrl: string, apiKey: string): Promise<boolean> {
   const root = baseUrl.replace(/\/$/, "")
   const response = await fetch(`${root}/models`, {
@@ -100,7 +147,7 @@ export async function loadEngine(id: string): Promise<{
   kind: EngineKind
   baseUrl: string | null
   model: string | null
-  secret: string
+  secret: string | null
 } | null> {
   const rows = await sql<
     {
@@ -110,7 +157,7 @@ export async function loadEngine(id: string): Promise<{
       status: EngineStatus
       baseUrl: string | null
       model: string | null
-      secretEnc: string
+      secretEnc: string | null
     }[]
   >`
     select id, name, kind, status, base_url as "baseUrl", model, secret_enc as "secretEnc"
@@ -125,7 +172,7 @@ export async function loadEngine(id: string): Promise<{
     kind: row.kind,
     baseUrl: row.baseUrl,
     model: row.model,
-    secret: decryptSecret(row.secretEnc),
+    secret: row.secretEnc ? decryptSecret(row.secretEnc) : null,
   }
 }
 

@@ -12,6 +12,7 @@ import { checkoutBranch, cloneRepo, commitAll, gitSnapshot, pushHead } from "./g
 import { appendArchive, ensureProjectKnowledge, projectMemory } from "./knowledge.js"
 import { addPackage, listPackages, removePackage } from "./packages.js"
 import { forgetPreview, handlePreviewHttp, handlePreviewUpgrade, previewStates, startPreview, stopAllPreviews, stopPreview, stopProject } from "./previews.js"
+import { readLogin, startLogin, writeLogin } from "./login.js"
 
 const port = Number(process.env.PORT ?? 4000)
 const workspacesDir = process.env.WORKSPACES_DIR ?? "/workspaces"
@@ -32,6 +33,38 @@ app.post("/engines/:id", async (c) => {
   if (!home) return c.json({ error: "Identificativo non valido" }, 400)
   await mkdir(home, { recursive: true, mode: 0o700 })
   return c.json({ ok: true, home })
+})
+
+app.post("/engines/:id/login", async (c) => {
+  const id = c.req.param("id")
+  const home = inside(enginesDir, id)
+  const body = await c.req.json().catch(() => null)
+  if (!home || !id || !isKind(body?.kind)) return c.json({ error: "Identificativo non valido" }, 400)
+  try {
+    return c.json(startLogin(id, home, body.kind))
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Accesso non avviato" }, 400)
+  }
+})
+
+app.get("/engines/:id/login", async (c) => {
+  const id = c.req.param("id")
+  if (!id || !uuid.test(id)) return c.json({ error: "Identificativo non valido" }, 400)
+  return c.json(readLogin(id))
+})
+
+app.post("/engines/:id/login/input", async (c) => {
+  const id = c.req.param("id")
+  const body = await c.req.json().catch(() => null)
+  const text = typeof body?.text === "string" ? body.text : ""
+  if (!id || !uuid.test(id) || text.length < 1 || text.length > 400) {
+    return c.json({ error: "Manca il codice" }, 400)
+  }
+  try {
+    return c.json(writeLogin(id, text))
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Codice non inviato" }, 400)
+  }
 })
 
 app.post("/projects/:id", async (c) => {
@@ -304,14 +337,14 @@ function readSpec(projectId: string, body: {
   resumeId?: unknown
 } | null): SessionSpec | null {
   if (!body || typeof body.engineId !== "string" || !uuid.test(body.engineId)) return null
-  if (!isKind(body.kind) || typeof body.secret !== "string" || typeof body.prompt !== "string" || !body.prompt.trim()) {
-    return null
-  }
+  if (!isKind(body.kind) || typeof body.prompt !== "string" || !body.prompt.trim()) return null
+  const secret = typeof body.secret === "string" ? body.secret : null
+  if (body.kind === "openai" && !secret) return null
   return {
     projectId,
     engineId: body.engineId,
     kind: body.kind,
-    secret: body.secret,
+    secret,
     baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : null,
     model: typeof body.model === "string" ? body.model : null,
     prompt: body.prompt,
