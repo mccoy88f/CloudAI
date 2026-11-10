@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import path from "node:path"
 import { fileURLToPath } from "node:url"
 import type { EngineKind } from "@cloudai/shared"
 
@@ -13,6 +15,7 @@ type Login = {
   child: ChildProcess
   output: string
   exitCode: number | null
+  home: string
 }
 
 const sessions = new Map<string, Login>()
@@ -40,6 +43,7 @@ export function openLogin(
   const current = sessions.get(id)
   if (current?.child.exitCode === null && current.exitCode === null) return view(current)
   current?.child.kill("SIGTERM")
+  if (command === "gemini") prepareGeminiHome(home)
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: home,
@@ -56,7 +60,7 @@ export function openLogin(
     env,
     stdio: ["pipe", "pipe", "pipe"],
   })
-  const login: Login = { child, output: "", exitCode: null }
+  const login: Login = { child, output: "", exitCode: null, home }
   sessions.set(id, login)
   const append = (chunk: string) => {
     login.output = `${login.output}${chunk}`.slice(-12000)
@@ -71,7 +75,7 @@ export function openLogin(
   })
   child.on("exit", (code) => {
     if (sessions.get(id)?.child !== child) return
-    login.exitCode = code ?? 1
+    if (login.exitCode === null) login.exitCode = code ?? 1
   })
   return view(login)
 }
@@ -90,12 +94,53 @@ export function readLogin(id: string): LoginView {
 }
 
 function view(login: Login): LoginView {
+  if (login.exitCode === null && geminiSignedIn(login.home)) {
+    login.exitCode = 0
+    login.child.kill("SIGTERM")
+  }
   const shown = loginView(login.output)
   return { ...shown, running: login.exitCode === null, exitCode: login.exitCode }
+}
+
+function geminiSignedIn(home: string): boolean {
+  const dir = path.join(home, ".gemini")
+  return existsSync(path.join(dir, "gemini-credentials.json")) || existsSync(path.join(dir, "oauth_creds.json"))
+}
+
+function prepareGeminiHome(home: string): void {
+  const dir = path.join(home, ".gemini")
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const settingsPath = path.join(dir, "settings.json")
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(settingsPath, "utf8"))
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) settings = parsed as Record<string, unknown>
+    } catch {
+      settings = {}
+    }
+  }
+  const security = record(settings.security)
+  const auth = record(security.auth)
+  settings.security = { ...security, auth: { ...auth, selectedType: "oauth-personal" } }
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 })
+  rmSync(path.join(dir, "gemini-credentials.json"), { force: true })
+  rmSync(path.join(dir, "oauth_creds.json"), { force: true })
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
 function loginCommand(kind: EngineKind): { command: string; args: string[]; env: NodeJS.ProcessEnv } | null {
   if (kind === "claude") return { command: "claude", args: ["auth", "login"], env: {} }
   if (kind === "cursor") return { command: "agent", args: ["login"], env: { NO_OPEN_BROWSER: "1" } }
+  if (kind === "gemini") {
+    return {
+      command: "gemini",
+      args: [],
+      env: { NO_BROWSER: "true", GEMINI_FORCE_FILE_STORAGE: "true", GEMINI_CLI_TRUST_WORKSPACE: "true" },
+    }
+  }
   return null
 }

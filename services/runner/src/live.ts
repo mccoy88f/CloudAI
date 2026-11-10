@@ -156,7 +156,11 @@ function startCli(live: Live, spec: SessionSpec): void {
   delete env.GEMINI_API_KEY
   if (spec.kind === "claude" && spec.secret) env.ANTHROPIC_API_KEY = spec.secret
   if (spec.kind === "cursor" && spec.secret) env.CURSOR_API_KEY = spec.secret
-  if (spec.kind === "gemini" && spec.secret) env.GEMINI_API_KEY = spec.secret
+  if (spec.kind === "gemini") {
+    env.GEMINI_FORCE_FILE_STORAGE = "true"
+    env.GEMINI_CLI_TRUST_WORKSPACE = "true"
+    if (spec.secret) env.GEMINI_API_KEY = spec.secret
+  }
   const child = spawn(command, args, {
     cwd: live.cwd,
     env,

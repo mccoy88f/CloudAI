@@ -709,7 +709,7 @@ function readEngineInput(body: {
   const name = typeof body.name === "string" ? body.name.trim() : ""
   const kind = readEngineKind(body.kind)
   if (!kind || name.length < 1 || name.length > 80) return null
-  if (kind === "claude" || kind === "cursor") return { name, kind, secret: null, baseUrl: null, model: null }
+  if (kind !== "openai") return { name, kind, secret: null, baseUrl: null, model: null }
   const secret = readSecret(body.apiKey)
   if (!secret) return null
   if (kind === "openai") {

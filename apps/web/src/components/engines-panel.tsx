@@ -111,12 +111,13 @@ export function EnginesButton({ onChanged }: { onChanged: () => void }) {
                   </Field>
                 </>
               ) : null}
-              {kind === "claude" || kind === "cursor" ? (
+              {kind === "openai" ? null : (
                 <p className="text-xs text-muted-foreground">
                   Dopo l’aggiunta la CLI mostra un indirizzo. Aprilo, accedi e incolla qui il codice.
                 </p>
-              ) : (
-                <Field label={kind === "openai" ? "API key" : "Credenziale"} id="engine-key">
+              )}
+              {kind === "openai" ? (
+                <Field label="API key" id="engine-key">
                   <Input
                     id="engine-key"
                     type="password"
@@ -126,7 +127,7 @@ export function EnginesButton({ onChanged }: { onChanged: () => void }) {
                     onChange={(event) => setApiKey(event.target.value)}
                   />
                 </Field>
-              )}
+              ) : null}
               {error ? <p className="text-sm text-red-400">{error}</p> : null}
               <Button type="submit" disabled={pending}>
                 Aggiungi
@@ -143,7 +144,7 @@ function EngineRow({ engine, onChanged }: { engine: EngineSummary; onChanged: ()
   const [apiKey, setApiKey] = useState("")
   const [error, setError] = useState<string | null>(null)
   const label = kinds.find((item) => item.id === engine.kind)?.label ?? engine.kind
-  const cli = engine.kind === "claude" || engine.kind === "cursor"
+  const cli = engine.kind !== "openai"
   const status = engine.status === "connected" ? "collegato" : engine.status === "login" ? "in attesa di accesso" : "disattivato"
 
   return (

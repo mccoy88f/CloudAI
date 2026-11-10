@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
+import path from "node:path"
 import { test } from "node:test"
 import { loginView, openLogin, readLogin } from "./login.js"
 
@@ -18,6 +19,21 @@ test("the login bridge prints the address from the CLI", async () => {
     const state = await waitFor(id)
     assert.equal(state.url, "https://example.com/login")
     assert.equal(state.exitCode, 0)
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test("gemini login completes when the account file appears", async () => {
+  const home = await mkdtemp(`${tmpdir()}/cloudai-gemini-`)
+  const id = "22222222-2222-4222-8222-222222222222"
+  try {
+    openLogin(id, home, "python3", ["-c", "import time; time.sleep(5)"])
+    await mkdir(path.join(home, ".gemini"), { recursive: true })
+    await writeFile(path.join(home, ".gemini", "gemini-credentials.json"), "signed")
+    const state = await waitFor(id)
+    assert.equal(state.exitCode, 0)
+    assert.equal(state.running, false)
   } finally {
     await rm(home, { recursive: true, force: true })
   }

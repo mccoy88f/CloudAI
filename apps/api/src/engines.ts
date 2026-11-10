@@ -33,7 +33,7 @@ export async function insertEngine(input: {
 }): Promise<EngineSummary> {
   const id = randomUUID()
   if (input.kind !== "openai") await ensureEngineHome(id)
-  const status = input.kind === "claude" || input.kind === "cursor" ? "login" : "connected"
+  const status = input.kind === "openai" ? "connected" : "login"
   const rows = await sql<EngineRow[]>`
     insert into engines (id, name, kind, status, secret_enc, base_url, model)
     values (
@@ -59,8 +59,7 @@ export async function reconnectEngine(
   const current = await sql<{ kind: EngineKind }[]>`select kind from engines where id = ${id}`
   const kind = current[0]?.kind
   if (!kind) return null
-  if (kind === "claude" || kind === "cursor") throw new Error("Usa l'accesso della CLI")
-  if (kind !== "openai") await ensureEngineHome(id)
+  if (kind !== "openai") throw new Error("Usa l'accesso della CLI")
   const rows = await sql<EngineRow[]>`
     update engines
     set secret_enc = ${encryptSecret(input.secret)},
@@ -85,7 +84,7 @@ export async function disableEngine(id: string): Promise<EngineSummary | null> {
 
 export async function beginCliLogin(id: string): Promise<LoginState> {
   const kind = await engineKind(id)
-  if (kind !== "claude" && kind !== "cursor") throw new Error("Questo motore non usa l'accesso della CLI")
+  if (kind !== "claude" && kind !== "cursor" && kind !== "gemini") throw new Error("Questo motore non usa l'accesso della CLI")
   await ensureEngineHome(id)
   await sql`update engines set status = 'login', secret_enc = null where id = ${id}`
   const state = await callRunner<LoginState>(`/engines/${id}/login`, {
